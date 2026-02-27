@@ -1,0 +1,174 @@
+# =============================================================================
+# MCP Offline — Tool Specifications (P5 v1.1)
+# =============================================================================
+# Declarative tool definitions for local LLM agents (Ollama, etc.).
+# Each [[tools]] entry auto-generates an Ollama-compatible function definition.
+#
+# Format:
+#   name        = Tool name (used in whitelist + routing)
+#   description = LLM-facing description (guides tool selection)
+#   handler     = Router handler type: "http" (daemon API) or "filesystem"
+#   http_method = For handler="http": GET or POST
+#   http_path   = For handler="http": daemon endpoint path
+#
+#   [[tools.params]]
+#     name        = Parameter name
+#     type        = JSON Schema type: "string", "integer", "boolean"
+#     description = LLM-facing parameter description
+#     required    = Is this parameter required? (default: false)
+#     default     = Default value (omit if no default)
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# AIRCP Communication Tools
+# ---------------------------------------------------------------------------
+[[tools]]
+name = "aircp_send"
+description = "Envoyer un message sur un channel AIRCP. Utilise cet outil pour communiquer avec les autres agents ou humains."
+handler = "http"
+http_method = "POST"
+http_path = "/send"
+
+  [[tools.params]]
+  name = "room"
+  type = "string"
+  description = "Channel cible (ex: #general)"
+  default = "#general"
+
+  [[tools.params]]
+  name = "message"
+  type = "string"
+  description = "Message à envoyer"
+  required = true
+
+# ---------------------------------------------------------------------------
+[[tools]]
+name = "aircp_history"
+description = "Lire l'historique des messages d'un channel AIRCP. Utile pour comprendre le contexte de la conversation."
+handler = "http"
+http_method = "GET"
+http_path = "/history"
+
+  [[tools.params]]
+  name = "room"
+  type = "string"
+  description = "Channel à lire (ex: #general)"
+  default = "#general"
+
+  [[tools.params]]
+  name = "limit"
+  type = "integer"
+  description = "Nombre max de messages (défaut: 20)"
+  default = 20
+
+# ---------------------------------------------------------------------------
+# Memory API Tools (v3.0 — full-text search + date retrieval)
+# ---------------------------------------------------------------------------
+[[tools]]
+name = "memory_search"
+description = "Rechercher dans l'historique des messages avec recherche plein texte (FTS5). Utile pour retrouver des conversations passées."
+handler = "http"
+http_method = "GET"
+http_path = "/memory/search"
+
+  [[tools.params]]
+  name = "q"
+  type = "string"
+  description = "Mots-clés de recherche (ex: forum refactor)"
+  required = true
+
+  [[tools.params]]
+  name = "room"
+  type = "string"
+  description = "Filtrer par channel (ex: #general)"
+
+  [[tools.params]]
+  name = "agent"
+  type = "string"
+  description = "Filtrer par agent (ex: @alpha)"
+
+  [[tools.params]]
+  name = "limit"
+  type = "integer"
+  description = "Nombre max de résultats (défaut: 50)"
+  default = 50
+
+# ---------------------------------------------------------------------------
+[[tools]]
+name = "memory_get"
+description = "Récupérer des messages par ID ou par date/heure. Utile pour relire une conversation à une date précise."
+handler = "http"
+http_method = "GET"
+http_path = "/memory/get"
+
+  [[tools.params]]
+  name = "id"
+  type = "string"
+  description = "ID du message à récupérer"
+
+  [[tools.params]]
+  name = "day"
+  type = "string"
+  description = "Filtrer par date YYYY-MM-DD"
+
+  [[tools.params]]
+  name = "hour"
+  type = "integer"
+  description = "Filtrer par heure 0-23 (requiert day)"
+
+  [[tools.params]]
+  name = "room"
+  type = "string"
+  description = "Filtrer par channel"
+
+# ---------------------------------------------------------------------------
+# File System Tools (sandboxed, read-only)
+# ---------------------------------------------------------------------------
+[[tools]]
+name = "file_read"
+description = "Lire le contenu d'un fichier texte. Limité aux fichiers dans /projects/. Refuse les fichiers binaires (images, archives, etc.)."
+handler = "filesystem"
+
+  [[tools.params]]
+  name = "path"
+  type = "string"
+  description = "Chemin absolu du fichier (doit commencer par /projects/)"
+  required = true
+
+  [[tools.params]]
+  name = "limit"
+  type = "integer"
+  description = "Nombre max de lignes à lire (défaut: 200)"
+  default = 200
+
+# ---------------------------------------------------------------------------
+[[tools]]
+name = "file_list"
+description = "Lister les fichiers d'un répertoire. Limité à /projects/."
+handler = "filesystem"
+
+  [[tools.params]]
+  name = "path"
+  type = "string"
+  description = "Chemin du répertoire (doit commencer par /projects/)"
+  required = true
+
+# ---------------------------------------------------------------------------
+# Code Analysis Tools
+# ---------------------------------------------------------------------------
+[[tools]]
+name = "code_summary"
+description = "Analyser la structure d'un fichier Python : classes, methodes avec signatures, imports, globals, LOC, TODO/FIXME. Produit un squelette compact (~50 lignes) au lieu du fichier brut. Ideal pour review rapide."
+handler = "filesystem"
+
+  [[tools.params]]
+  name = "path"
+  type = "string"
+  description = "Chemin absolu du fichier Python (doit commencer par /projects/)"
+  required = true
+
+  [[tools.params]]
+  name = "include_docstrings"
+  type = "boolean"
+  description = "Inclure les docstrings des classes/methodes (defaut: false)"
+  default = false

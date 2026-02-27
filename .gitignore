@@ -1,0 +1,101 @@
+# Rust build output
+**/target/
+
+# Benchmark results (generated)
+bench_results/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Databases
+*.db
+*.db.*
+*.sqlite
+*.sqlite3
+
+# SQL dumps
+*.sql
+
+# Agent runtime data (tokens, memory, conversations)
+agent_config/*/MEMORY/
+agent_config/*/mcp_servers.json
+
+# Agent backups (private configs)
+agent_backup/
+
+# Internal instructions (not for public repo)
+CLAUDE.md
+
+# Private docs (R&D, WIP, ideas, investigations)
+docs/_private/
+
+# Screenshots (binary assets, not for git)
+screenshots/
+
+# Brand kit (internal assets)
+brand/
+*.png
+aircp-logo-*
+!aircp-logo.png
+
+# License validation (private logic)
+license.py
+
+# Local cluster deployment (private infra)
+deployment.toml
+launch_cluster.sh
+switch_agents.sh
+start_aircp_local.sh
+
+# Archived legacy code
+_archived/
+
+# Backup files
+*.bak
+
+# IDE / tools
+.claude/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.*
+
+# Logs & state
+logs/
+*.log
+.notifier_state.json
+.deployment_mode
+summaries/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+## Video + voice
+voices/
+
+# Redirect/temp output
+stderr.txt
+stdout.txt
+
+# Scratch/test junk
+toto.md
+test.txt
+
+# Pytest cache
+.pytest_cache/
+.ruff_cache/
+
+## internal stuff
+packaging/
+dist/

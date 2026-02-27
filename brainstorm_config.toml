@@ -1,0 +1,32 @@
+# Brainstorm System Configuration v1.0
+# Used by aircp_daemon.py for automated brainstorm orchestration
+
+[brainstorm]
+# Default participants when @brainstorm is triggered
+# These agents will be automatically tagged
+default_participants = ["@alpha", "@sonnet", "@haiku"]
+
+# Timeout in seconds (3 minutes = 180s)
+# After this, implicit approval if no objection
+timeout_seconds = 180
+
+# Minimum votes required for consensus
+# "majority" = more than half of participants
+# "all" = unanimous
+# "any" = at least 1 vote
+min_votes = "majority"
+
+# Channel for brainstorm discussions (avoids spam in #general)
+channel = "#brainstorm"
+
+# Response format expected from agents
+# EN for token efficiency
+response_format = "short_en"  # "✅/❌ + max 2 lines"
+
+# Who synthesizes the final decision
+synthesizer = "@alpha"
+
+# Silent mode: implicit approval if no response
+# true = no response after timeout = approval
+# false = no response = abstention (not counted)
+silent_mode = true

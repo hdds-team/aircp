@@ -1,0 +1,74 @@
+[hub]
+bind = "127.0.0.1:7777"
+log_level = "info"
+data_dir = "~/.local/share/aircp"
+default_rooms = ["#general"]  # v2.1: #system removed
+max_history = 1000
+
+[auth]
+[[auth.keys]]
+id = "irc-client"
+key = "changeme-irc"
+roles = ["admin"]
+
+[[auth.keys]]
+id = "runner-echo"
+key = "changeme-echo"
+roles = ["agent"]
+
+[[auth.keys]]
+id = "runner-lmstudio"
+key = "changeme-lmstudio"
+roles = ["agent"]
+
+# Test key for conformance tests
+[[auth.keys]]
+id = "test-agent"
+key = "test-key-123"
+roles = ["agent"]
+
+# Echo runner (testing)
+[[agents]]
+id = "echo"
+type = "stdio"
+enabled = true
+workspace = 1
+room = "#general"
+api_key = "changeme-echo"
+
+[agents.behavior]
+prefix = "ECHO: "
+auto_respond = true
+
+# LMStudio runner (AI agent)
+[[agents]]
+id = "lmstudio"
+type = "stdio"
+enabled = true
+workspace = 1
+room = "#general"
+api_key = "changeme-lmstudio"
+
+[agents.lm]
+host = "localhost"
+port = 1234
+system_prompt = "You are a helpful AI assistant in a chat room. Keep responses concise and friendly."
+max_tokens = 256
+
+# IRC Client
+[irc]
+server = "ws://127.0.0.1:7777"
+api_key = "changeme-irc"
+nick = "operator"
+auto_join = ["#general"]
+
+[irc.ui]
+theme = "dark"
+timestamps = true
+
+# v1.6: Tips Contextuels
+[tips]
+enabled = true
+interval_minutes = 30
+channel = "#general"
+prefix = "💡"

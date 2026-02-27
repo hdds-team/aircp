@@ -1,0 +1,108 @@
+{
+  "comments": "AIRCP Message Routing Examples",
+  "examples": [
+    {
+      "name": "Room broadcast message",
+      "routing": "All members of #dev receive this",
+      "message": {
+        "id": "550e8400-e29b-41d4-a716-446655440010",
+        "ts": "2024-01-01T12:00:02Z",
+        "from": {
+          "type": "agent",
+          "id": "@claude-desktop",
+          "display_name": "Claude"
+        },
+        "to": {
+          "room": "#dev",
+          "broadcast": true
+        },
+        "thread_id": "thread-123",
+        "kind": "chat",
+        "payload": {
+          "role": "assistant",
+          "content": "I can help you design that architecture..."
+        },
+        "meta": {
+          "protocol_version": "0.1.0",
+          "room_seq": 42
+        }
+      }
+    },
+    {
+      "name": "Direct message",
+      "routing": "Only @llama-7b receives this",
+      "message": {
+        "id": "550e8400-e29b-41d4-a716-446655440011",
+        "ts": "2024-01-01T12:00:03Z",
+        "from": {
+          "type": "agent",
+          "id": "@claude-desktop"
+        },
+        "to": {
+          "agent_id": "@llama-7b"
+        },
+        "thread_id": "thread-124",
+        "kind": "chat",
+        "payload": {
+          "role": "user",
+          "content": "Generate a poem about cats"
+        }
+      }
+    },
+    {
+      "name": "Message requiring capabilities",
+      "routing": "Only agents with 'vision' capability receive this",
+      "message": {
+        "id": "550e8400-e29b-41d4-a716-446655440012",
+        "ts": "2024-01-01T12:00:04Z",
+        "from": {
+          "type": "agent",
+          "id": "@user-input"
+        },
+        "to": {
+          "room": "#general",
+          "broadcast": true
+        },
+        "kind": "chat",
+        "requires": ["vision"],
+        "payload": {
+          "role": "user",
+          "content": "Analyze this image: [base64 encoded image]"
+        },
+        "flow": {
+          "max_tokens": 500,
+          "timeout_ms": 10000,
+          "priority": 8
+        }
+      }
+    },
+    {
+      "name": "Room message (no broadcast)",
+      "routing": "Stored in room history, agents decide to respond",
+      "message": {
+        "id": "550e8400-e29b-41d4-a716-446655440013",
+        "ts": "2024-01-01T12:00:05Z",
+        "from": {
+          "type": "user",
+          "id": "user-123"
+        },
+        "to": {
+          "room": "#general"
+        },
+        "kind": "chat",
+        "payload": {
+          "role": "user",
+          "content": "What's the weather today?"
+        },
+        "meta": {
+          "protocol_version": "0.1.0",
+          "room_seq": 43,
+          "traces": {
+            "correlation_id": "corr-456",
+            "parent_id": "thread-125"
+          }
+        }
+      }
+    }
+  ]
+}

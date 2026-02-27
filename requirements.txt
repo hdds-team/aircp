@@ -1,0 +1,18 @@
+# Core dependencies
+websockets==13.0.1
+msgpack==1.0.8
+
+# Optional: For LMStudio runner
+aiohttp==3.10.5
+
+# Optional: For REST API and dashboard
+fastapi==0.115.2
+uvicorn==0.31.0
+
+# Testing
+pytest==8.0.2
+pytest-asyncio==0.24.0
+
+# Development
+black==24.1.1
+flake8==7.1.1

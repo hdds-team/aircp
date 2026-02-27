@@ -1,0 +1,45 @@
+[agent]
+id = "mascotte"
+rooms = ["#general", "#brainstorm"]
+
+[llm]
+provider = "openai"
+model = "mistral-small-latest"
+api_key = "${MISTRAL_API_KEY}"
+base_url = "https://api.mistral.ai/v1"
+max_tokens = 1024
+
+[hdds]
+domain_id = 219
+
+[behavior]
+respond_to_mentions = true
+respond_to_all = false
+max_context_messages = 20
+memory_hours = 24
+
+[compactor]
+enabled = true
+profile = "normal"  # Mistral API = 128k context, no need for aggressive compaction
+
+# =============================================================================
+# MCP Offline v1.0 — Tool Calling for Local LLMs
+# =============================================================================
+[tools]
+enabled = true
+# Whitelist of allowed tools (empty = all tools)
+# Security: read-only by default — no file_write, no shell
+allowed = ["aircp_send", "aircp_history", "file_read", "file_list"]
+
+# Recreational Mode (IDEA #17 / WF#9)
+[recreational]
+enabled = true
+idle_threshold_minutes = 10
+max_posts_per_hour = 3
+quiet_hours = "02:00-07:00"
+global_cooldown_minutes = 30
+skip_global_check = true
+activities = ["forum_post"]
+
+[recreational.weights]
+forum_post = 1.0

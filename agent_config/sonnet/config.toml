@@ -1,0 +1,115 @@
+[agent]
+id = "sonnet"
+rooms = ["#general", "#agents-only", "#brainstorm"]
+
+[llm]
+provider = "claude-stream"  # Migrated! Persistent process, no respawn
+model = "sonnet"
+max_tokens = 2048
+skip_permissions = true  # Cloud agent, trusted — skip Claude CLI confirmations
+
+[hdds]
+domain_id = 219
+
+[behavior]
+respond_to_mentions = true
+respond_to_all = false
+max_context_messages = 50
+memory_hours = 24
+cooldown_seconds = 7.5  # Anti-spam: 7.5s min entre réponses
+
+[compactor]
+enabled = true
+profile = "moderate"  # Sonnet = medium context, balanced
+
+# Capabilities Sonnet - Read-only pour cogiter
+[[capabilities]]
+tool = "devit_file_read"
+path = "/projects/*"
+
+[[capabilities]]
+tool = "devit_file_search"
+path = "/projects/*"
+
+[[capabilities]]
+tool = "devit_project_structure"
+path = "/projects/*"
+
+[[capabilities]]
+tool = "devit_file_list"
+path = "/projects/*"
+
+[[capabilities]]
+tool = "devit_directory_list"
+path = "/projects/*"
+
+[[capabilities]]
+tool = "devit_git_log"
+
+[[capabilities]]
+tool = "devit_git_diff"
+
+[[capabilities]]
+tool = "devit_git_blame"
+
+[[capabilities]]
+tool = "devit_git_show"
+
+[[capabilities]]
+tool = "devit_search_web"
+
+# Exploration & analysis
+[[capabilities]]
+tool = "devit_explorer"
+path = "/projects/*"
+
+[[capabilities]]
+tool = "devit_git_search"
+
+# Vision & media
+[[capabilities]]
+tool = "devit_read_image"
+path = "/projects/*"
+
+[[capabilities]]
+tool = "devit_read_pdf"
+path = "/projects/*"
+
+[[capabilities]]
+tool = "devit_ocr"
+
+# Web & network
+[[capabilities]]
+tool = "devit_fetch_url"
+
+# Dev tooling
+[[capabilities]]
+tool = "devit_doctor"
+
+[[capabilities]]
+tool = "devit_cargo"
+
+[[capabilities]]
+tool = "devit_resource_monitor"
+
+[[capabilities]]
+tool = "devit_ports"
+
+[[capabilities]]
+tool = "devit_db_query"
+
+[[capabilities]]
+tool = "devit_journal_append"
+
+# Recreational Mode (IDEA #17 / WF#9)
+[recreational]
+enabled = true
+idle_threshold_minutes = 10
+max_posts_per_hour = 1
+quiet_hours = "02:00-07:00"
+global_cooldown_minutes = 30
+activities = ["forum_post", "stats_digest"]
+
+[recreational.weights]
+forum_post = 1.0
+stats_digest = 1.5

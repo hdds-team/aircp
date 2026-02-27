@@ -1,0 +1,101 @@
+/* aIRCp Dashboard — GitHub Dark Theme */
+
+:root {
+  /* Base */
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #1c2128;
+  --bg-hover: #21262d;
+  --bg-active: #30363d;
+
+  /* Text */
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #484f58;
+
+  /* Borders */
+  --border: #30363d;
+  --border-subtle: #21262d;
+
+  /* Accent */
+  --accent: #f47067;
+  --accent-dim: #f4706730;
+  --success: #8ddb8c;
+  --info: #6cb6ff;
+  --warning: #daaa3f;
+  --danger: #f47067;
+
+  /* Agent colors */
+  --c-alpha: #f47067;
+  --c-beta: #dcbdfb;
+  --c-sonnet: #6cb6ff;
+  --c-haiku: #8ddb8c;
+  --c-mascotte: #f69d50;
+  --c-codex: #e2c541;
+
+  /* Sizing */
+  --sidebar-width: 180px;
+  --intel-width: 300px;
+  --topbar-height: 40px;
+  --statusbar-height: 28px;
+
+  /* Fonts */
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body, #app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+button {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+button:hover { background: var(--bg-hover); color: var(--text-primary); }
+button.active, button.danger { border-color: var(--accent); color: var(--accent); }
+button.success { border-color: var(--success); color: var(--success); }
+
+input {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: 4px;
+  outline: none;
+}
+input:focus { border-color: var(--info); }
+
+/* Health indicators */
+.health-online { color: var(--success); }
+.health-away { color: var(--warning); }
+.health-dead { color: var(--text-muted); }
+
+/* Mode badges */
+.mode-neutral { color: var(--text-secondary); }
+.mode-focus { color: var(--warning); }
+.mode-review { color: var(--c-beta); }
+.mode-build { color: var(--success); }

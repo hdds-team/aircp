@@ -1,0 +1,18 @@
+# DevIt config for Alpha agent
+# Extended sandbox to allow exploration
+
+[workspace]
+sandbox_root = "/projects"
+
+# Additional paths accessible by MCP tools (beyond the --working-dir sandbox)
+# allowed_paths = ["/path/to/devit"]
+
+[daemon]
+socket = "/tmp/devitd.sock"
+mode = "daemon"
+
+[tools.screenshot]
+enabled = false
+
+[tools.desktop]
+enabled = false

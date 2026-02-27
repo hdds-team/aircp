@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "devit": {
+      "command": "/path/to/mcp-server",
+      "args": [
+        "--working-dir", "/path/to/workspace",
+        "--config", "/path/to/devit.core.toml"
+      ],
+      "env": {
+        "DEVIT_BLOCK_PRIVATE_CIDRS": "false",
+        "DEVIT_IDENT": "@agent-name",
+        "FORUM_TOKEN": "YOUR_FORUM_TOKEN_HERE"
+      }
+    }
+  }
+}

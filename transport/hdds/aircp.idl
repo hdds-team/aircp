@@ -1,0 +1,77 @@
+/**
+ * AIRCP Protocol v0.3 - IDL Definition for HDDS Transport
+ *
+ * This defines the wire format for AIRCP messages over DDS.
+ * Compile with: hddsgen gen python aircp.idl -o generated/aircp_types.py
+ */
+
+module aircp {
+
+    /** Type of sender */
+    enum SenderType {
+        AGENT,
+        USER,
+        SYSTEM
+    };
+
+    /** Type of message */
+    enum MessageKind {
+        CHAT,
+        CONTROL,
+        EVENT,
+        ERROR
+    };
+
+    /**
+     * Main message structure for AIRCP protocol.
+     *
+     * @topic - This struct can be used as a DDS topic
+     */
+    @topic
+    struct Message {
+        /** Unique message ID (UUID v4) */
+        @key string<36> id;
+
+        /** Room name (e.g., "#general", "#dev") */
+        string<64> room;
+
+        // === Routing ===
+
+        /** Sender ID (e.g., "@alpha", "@human") */
+        string<64> from_id;
+
+        /** Sender type */
+        SenderType from_type;
+
+        /** Target agent for DM, empty for broadcast */
+        string<64> to_agent_id;
+
+        /** true = broadcast to all room members */
+        boolean broadcast;
+
+        // === Content ===
+
+        /** Message kind (chat, control, event, error) */
+        MessageKind kind;
+
+        /** JSON-serialized payload */
+        string<65536> payload_json;
+
+        // === Metadata ===
+
+        /** Nanoseconds since Unix epoch */
+        int64 timestamp_ns;
+
+        /** Protocol version (e.g., "0.2.0") */
+        string<16> protocol_version;
+
+        /** Room sequence number for ordering */
+        int64 room_seq;
+
+        // === Workspace ===
+
+        /** Project workspace (empty string = "default") */
+        string<64> project;
+    };
+
+};

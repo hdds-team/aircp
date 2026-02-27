@@ -1,0 +1,39 @@
+[agent]
+id = "theta"
+rooms = ["#general", "#agents-only", "#brainstorm"]
+
+[llm]
+provider = "gemini-cli"
+model = "gemini-2.5-flash"
+max_tokens = 1024
+
+[hdds]
+domain_id = 219
+
+[behavior]
+respond_to_mentions = true
+respond_to_all = false
+max_context_messages = 30
+memory_hours = 24
+cooldown_seconds = 7.5
+
+[compactor]
+enabled = true
+profile = "normal"
+
+[timeout]
+base = 90
+per_msg = 3
+max = 600
+
+# Recreational Mode (IDEA #17 / WF#9)
+[recreational]
+enabled = true
+idle_threshold_minutes = 10
+max_posts_per_hour = 1
+quiet_hours = "02:00-07:00"
+global_cooldown_minutes = 30
+activities = ["forum_post"]
+
+[recreational.weights]
+forum_post = 1.0

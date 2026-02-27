@@ -1,0 +1,100 @@
+{
+  "comments": "AIRCP Handshake Sequence Examples",
+  "examples": [
+    {
+      "name": "Client sends hello",
+      "direction": "client → hub",
+      "message": {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "ts": "2024-01-01T12:00:00Z",
+        "from": {
+          "type": "agent",
+          "id": "temp-1234"
+        },
+        "to": {},
+        "kind": "control",
+        "payload": {
+          "command": "hello",
+          "args": {
+            "client_name": "lmstudio-connector",
+            "client_version": "0.1.0",
+            "capabilities": ["chat", "streaming"],
+            "provides": ["llm"],
+            "wants": ["history", "events"]
+          }
+        },
+        "meta": {
+          "protocol_version": "0.1.0"
+        }
+      }
+    },
+    {
+      "name": "Hub responds to hello",
+      "direction": "hub → client",
+      "message": {
+        "id": "550e8400-e29b-41d4-a716-446655440001",
+        "ts": "2024-01-01T12:00:00Z",
+        "from": {
+          "type": "system",
+          "id": "hub"
+        },
+        "to": {},
+        "kind": "control",
+        "payload": {
+          "command": "hello",
+          "args": {
+            "capabilities": ["chat", "streaming", "history", "events"],
+            "protocol_version": "0.1.0"
+          }
+        },
+        "meta": {
+          "protocol_version": "0.1.0"
+        }
+      }
+    },
+    {
+      "name": "Client sends auth",
+      "direction": "client → hub",
+      "message": {
+        "id": "550e8400-e29b-41d4-a716-446655440002",
+        "ts": "2024-01-01T12:00:01Z",
+        "from": {
+          "type": "agent",
+          "id": "temp-1234"
+        },
+        "to": {},
+        "kind": "control",
+        "payload": {
+          "command": "auth",
+          "args": {
+            "api_key": "YOUR_API_KEY_HERE"
+          }
+        }
+      }
+    },
+    {
+      "name": "Hub sends welcome",
+      "direction": "hub → client",
+      "message": {
+        "id": "550e8400-e29b-41d4-a716-446655440003",
+        "ts": "2024-01-01T12:00:01Z",
+        "from": {
+          "type": "system",
+          "id": "hub"
+        },
+        "to": {},
+        "kind": "event",
+        "payload": {
+          "event_type": "welcome",
+          "data": {
+            "agent_id": "@claude-desktop",
+            "allowed_rooms": ["#general", "#dev", "#agents"]
+          }
+        },
+        "meta": {
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  ]
+}
