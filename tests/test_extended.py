@@ -23,6 +23,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
+
 # Add parent to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,7 +35,7 @@ from agents.fallback_parser import FallbackParser
 # =============================================================================
 # Helpers
 # =============================================================================
-class TestResult:
+class _TestResult:
     def __init__(self):
         self.passed = 0
         self.failed = 0
@@ -58,6 +60,12 @@ class TestResult:
                 print(f"  - {name}: {reason}")
         print(f"{'='*60}")
         return self.failed == 0
+
+
+@pytest.fixture
+def results():
+    """Provide _TestResult instance for pytest-collected test functions."""
+    return _TestResult()
 
 
 # =============================================================================
@@ -107,7 +115,7 @@ def cleanup_fixtures():
 # =============================================================================
 # Tests: Daemon Down
 # =============================================================================
-async def test_daemon_down_http_tools(results: TestResult):
+async def test_daemon_down_http_tools(results: _TestResult):
     """HTTP tools must fail gracefully when daemon is down."""
     print("\n🔌 Daemon Down — HTTP Tools:")
 
@@ -142,7 +150,7 @@ async def test_daemon_down_http_tools(results: TestResult):
         results.fail("aircp_history", "Should have failed with daemon down")
 
 
-async def test_daemon_down_fs_tools_work(results: TestResult):
+async def test_daemon_down_fs_tools_work(results: _TestResult):
     """Filesystem tools must still work when daemon is down."""
     print("\n🔌 Daemon Down — FS Tools Still Work:")
 
@@ -176,7 +184,7 @@ async def test_daemon_down_fs_tools_work(results: TestResult):
 # =============================================================================
 # Tests: Invalid Arguments
 # =============================================================================
-async def test_invalid_args(results: TestResult):
+async def test_invalid_args(results: _TestResult):
     """Tools must handle invalid/missing arguments gracefully."""
     print("\n⚠️ Invalid Arguments:")
 
@@ -224,7 +232,7 @@ async def test_invalid_args(results: TestResult):
 # =============================================================================
 # Tests: Large Files and Truncation
 # =============================================================================
-async def test_large_file_truncation(results: TestResult):
+async def test_large_file_truncation(results: _TestResult):
     """Large files are truncated to the limit."""
     print("\n📏 Large File Truncation:")
 
@@ -256,7 +264,7 @@ async def test_large_file_truncation(results: TestResult):
         results.fail("No truncation", f"Got: {result}")
 
 
-async def test_empty_file(results: TestResult):
+async def test_empty_file(results: _TestResult):
     """Empty file returns empty content (not error)."""
     print("\n📄 Empty File:")
 
@@ -275,7 +283,7 @@ async def test_empty_file(results: TestResult):
         results.fail("Empty file", f"Should succeed: {result.get('error')}")
 
 
-async def test_unicode_file(results: TestResult):
+async def test_unicode_file(results: _TestResult):
     """Unicode content is handled correctly."""
     print("\n🌍 Unicode File:")
 
@@ -302,7 +310,7 @@ async def test_unicode_file(results: TestResult):
 # =============================================================================
 # Tests: file_list Edge Cases
 # =============================================================================
-async def test_file_list_capped(results: TestResult):
+async def test_file_list_capped(results: _TestResult):
     """file_list caps at 100 entries with overflow notice."""
     print("\n📂 file_list Capping:")
 
@@ -321,7 +329,7 @@ async def test_file_list_capped(results: TestResult):
         results.fail("Capping", f"Expected overflow notice: {result}")
 
 
-async def test_deep_nested_read(results: TestResult):
+async def test_deep_nested_read(results: _TestResult):
     """Can read deeply nested files."""
     print("\n📂 Deep Nested Read:")
 
@@ -343,7 +351,7 @@ async def test_deep_nested_read(results: TestResult):
 # =============================================================================
 # Tests: Sandbox edge cases
 # =============================================================================
-async def test_sandbox_symlink_escape(results: TestResult):
+async def test_sandbox_symlink_escape(results: _TestResult):
     """Symlinks outside sandbox must be blocked."""
     print("\n🔒 Sandbox Symlink:")
 
@@ -373,7 +381,7 @@ async def test_sandbox_symlink_escape(results: TestResult):
         link_path.unlink()
 
 
-async def test_path_traversal_variants(results: TestResult):
+async def test_path_traversal_variants(results: _TestResult):
     """Various path traversal attempts must be blocked."""
     print("\n🔒 Path Traversal Variants:")
 
@@ -400,7 +408,7 @@ async def test_path_traversal_variants(results: TestResult):
 # =============================================================================
 # Tests: Limit clamping
 # =============================================================================
-async def test_limit_clamping(results: TestResult):
+async def test_limit_clamping(results: _TestResult):
     """Limit values are clamped to valid range."""
     print("\n📏 Limit Clamping:")
 
@@ -434,7 +442,7 @@ async def test_limit_clamping(results: TestResult):
 # =============================================================================
 # Tests: Tool not in spec (spec-driven routing)
 # =============================================================================
-async def test_spec_routing_unknown_handler(results: TestResult):
+async def test_spec_routing_unknown_handler(results: _TestResult):
     """Tool with unknown handler type → error."""
     print("\n🗺️ Spec Routing:")
 
@@ -454,7 +462,7 @@ async def test_spec_routing_unknown_handler(results: TestResult):
 # =============================================================================
 # Tests: Fallback + Router combined scenarios
 # =============================================================================
-async def test_fallback_daemon_down(results: TestResult):
+async def test_fallback_daemon_down(results: _TestResult):
     """Fallback intents for HTTP tools fail gracefully when daemon is down."""
     print("\n🔌 Fallback + Daemon Down:")
 
@@ -491,7 +499,7 @@ path: /projects/aircp/README.md
             results.fail("FS fallback", f"Should work: {result2.get('error')}")
 
 
-async def test_fallback_sandbox_escape(results: TestResult):
+async def test_fallback_sandbox_escape(results: _TestResult):
     """Fallback-parsed paths must still respect sandbox."""
     print("\n🔒 Fallback + Sandbox:")
 
@@ -525,7 +533,7 @@ async def main():
     print("🧪 Extended Test Harness — MCP Offline v1.1 (P6)")
     print("=" * 60)
 
-    results = TestResult()
+    results = _TestResult()
 
     # Setup
     print("\n⚙️ Setup:")

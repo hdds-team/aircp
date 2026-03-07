@@ -26,6 +26,8 @@ import time
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime, timezone, timedelta
 
+import pytest
+
 # Add parent to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,7 +35,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # =============================================================================
 # Helpers
 # =============================================================================
-class TestResult:
+
+@pytest.fixture
+def r():
+    """Provide _TestResult instance for pytest-collected test functions."""
+    return _TestResult()
+class _TestResult:
     def __init__(self):
         self.passed = 0
         self.failed = 0
@@ -197,7 +204,7 @@ def simulate_watchdog_cycle(active_reviews, storage_mock, transport_mock,
 # Tests
 # =============================================================================
 
-def test_no_ping_before_delay(r: TestResult):
+def test_no_ping_before_delay(r: _TestResult):
     """Review younger than REVIEW_PING_DELAY → no ping."""
     storage = MagicMock()
     transport = MagicMock()
@@ -215,7 +222,7 @@ def test_no_ping_before_delay(r: TestResult):
         r.fail("no_ping_before_delay", f"Expected 0 msgs, got {len(msgs)}")
 
 
-def test_first_ping_after_delay(r: TestResult):
+def test_first_ping_after_delay(r: _TestResult):
     """Review older than REVIEW_PING_DELAY → first ping sent."""
     storage = MagicMock()
     transport = MagicMock()
@@ -233,7 +240,7 @@ def test_first_ping_after_delay(r: TestResult):
         r.fail("first_ping_after_delay", f"Expected 1 ping, got {len(msgs)}, state={state}")
 
 
-def test_throttle_prevents_double_ping(r: TestResult):
+def test_throttle_prevents_double_ping(r: _TestResult):
     """Second cycle within REVIEW_PING_INTERVAL → no ping."""
     storage = MagicMock()
     transport = MagicMock()
@@ -253,7 +260,7 @@ def test_throttle_prevents_double_ping(r: TestResult):
         r.fail("throttle_prevents_double_ping", f"Expected 0, got {len(msgs)}")
 
 
-def test_second_ping_after_interval(r: TestResult):
+def test_second_ping_after_interval(r: _TestResult):
     """Second ping sent after REVIEW_PING_INTERVAL elapsed."""
     storage = MagicMock()
     transport = MagicMock()
@@ -273,7 +280,7 @@ def test_second_ping_after_interval(r: TestResult):
         r.fail("second_ping_after_interval", f"Expected ping 2, got {msgs}")
 
 
-def test_max_pings_stops_spamming(r: TestResult):
+def test_max_pings_stops_spamming(r: _TestResult):
     """After REVIEW_PING_MAX pings → no more pings."""
     storage = MagicMock()
     transport = MagicMock()
@@ -293,7 +300,7 @@ def test_max_pings_stops_spamming(r: TestResult):
         r.fail("max_pings_stops_spamming", f"Expected 0, got {len(msgs)}")
 
 
-def test_escalation_at_5_min(r: TestResult):
+def test_escalation_at_5_min(r: _TestResult):
     """Review older than 5 min → escalation message."""
     storage = MagicMock()
     transport = MagicMock()
@@ -313,7 +320,7 @@ def test_escalation_at_5_min(r: TestResult):
         r.fail("escalation_at_5_min", f"Expected escalation, got {msgs}, state={state.get(1)}")
 
 
-def test_no_double_escalation(r: TestResult):
+def test_no_double_escalation(r: _TestResult):
     """Already escalated → no second escalation (but still normal pings)."""
     storage = MagicMock()
     transport = MagicMock()
@@ -332,7 +339,7 @@ def test_no_double_escalation(r: TestResult):
         r.fail("no_double_escalation", f"Expected non-escalation ping, got {msgs}")
 
 
-def test_cleanup_when_all_voted(r: TestResult):
+def test_cleanup_when_all_voted(r: _TestResult):
     """All reviewers voted → state cleaned up, no ping."""
     storage = MagicMock()
     transport = MagicMock()
@@ -352,7 +359,7 @@ def test_cleanup_when_all_voted(r: TestResult):
         r.fail("cleanup_when_all_voted", f"Expected cleanup, got msgs={len(msgs)}, state={state}")
 
 
-def test_partial_votes_ping_non_voters_only(r: TestResult):
+def test_partial_votes_ping_non_voters_only(r: _TestResult):
     """One reviewer voted, other didn't → ping only non-voter."""
     storage = MagicMock()
     transport = MagicMock()
@@ -376,7 +383,7 @@ def test_partial_votes_ping_non_voters_only(r: TestResult):
         r.fail("partial_votes_ping_non_voters_only", f"Expected 1 msg, got {len(msgs)}")
 
 
-def test_legacy_db_reminder_on_first_ping(r: TestResult):
+def test_legacy_db_reminder_on_first_ping(r: _TestResult):
     """First ping → mark_review_reminder_sent called (backward compat)."""
     storage = MagicMock()
     transport = MagicMock()
@@ -393,7 +400,7 @@ def test_legacy_db_reminder_on_first_ping(r: TestResult):
         r.fail("legacy_db_reminder_on_first_ping", "mark_review_reminder_sent not called")
 
 
-def test_no_legacy_db_on_subsequent_pings(r: TestResult):
+def test_no_legacy_db_on_subsequent_pings(r: _TestResult):
     """Second+ pings → don't call mark_review_reminder_sent again."""
     storage = MagicMock()
     transport = MagicMock()
@@ -412,7 +419,7 @@ def test_no_legacy_db_on_subsequent_pings(r: TestResult):
         r.fail("no_legacy_db_on_subsequent_pings", "mark_review_reminder_sent called on ping 2")
 
 
-def test_message_contains_mcp_reminder(r: TestResult):
+def test_message_contains_mcp_reminder(r: _TestResult):
     """Ping message should remind to use MCP command, not just chat."""
     storage = MagicMock()
     transport = MagicMock()
@@ -433,7 +440,7 @@ def test_message_contains_mcp_reminder(r: TestResult):
         r.fail("message_contains_mcp_reminder", f"Expected 1 msg, got {len(msgs)}")
 
 
-def test_escalation_message_mentions_duration(r: TestResult):
+def test_escalation_message_mentions_duration(r: _TestResult):
     """Escalation message should mention how long the review has been waiting."""
     storage = MagicMock()
     transport = MagicMock()
@@ -456,7 +463,7 @@ def test_escalation_message_mentions_duration(r: TestResult):
         r.fail("escalation_message_mentions_duration", f"Expected escalation, got {msgs}")
 
 
-def test_multiple_reviews_independent_state(r: TestResult):
+def test_multiple_reviews_independent_state(r: _TestResult):
     """Two concurrent reviews tracked independently."""
     storage = MagicMock()
     transport = MagicMock()
@@ -484,7 +491,7 @@ def test_multiple_reviews_independent_state(r: TestResult):
                 f"Expected 2 msgs, got {len(msgs)}, state={state}")
 
 
-def test_unparseable_created_at_skips(r: TestResult):
+def test_unparseable_created_at_skips(r: _TestResult):
     """Malformed created_at → review_age=0 → skip (too young)."""
     storage = MagicMock()
     transport = MagicMock()
@@ -501,7 +508,7 @@ def test_unparseable_created_at_skips(r: TestResult):
         r.fail("unparseable_created_at_skips", f"Expected skip, got {len(msgs)} msgs")
 
 
-def test_no_reviews_no_crash(r: TestResult):
+def test_no_reviews_no_crash(r: _TestResult):
     """Empty review list → no crash, no pings."""
     storage = MagicMock()
     transport = MagicMock()
@@ -515,7 +522,7 @@ def test_no_reviews_no_crash(r: TestResult):
         r.fail("no_reviews_no_crash", f"Expected 0, got {len(msgs)}")
 
 
-def test_full_lifecycle_3_pings_then_stop(r: TestResult):
+def test_full_lifecycle_3_pings_then_stop(r: _TestResult):
     """Simulate full lifecycle: 3 pings over time, then stop."""
     storage = MagicMock()
     transport = MagicMock()
@@ -568,7 +575,7 @@ def test_full_lifecycle_3_pings_then_stop(r: TestResult):
                 f"Expected 3 total pings, got {total_pings}, state={state.get(1)}")
 
 
-def test_reviewer_votes_mid_cycle_stops_pings(r: TestResult):
+def test_reviewer_votes_mid_cycle_stops_pings(r: _TestResult):
     """Reviewer votes between pings → no more pings for them."""
     storage = MagicMock()
     transport = MagicMock()
@@ -602,7 +609,7 @@ def main():
     print("Review Watchdog P7 Tests")
     print("=" * 60)
 
-    r = TestResult()
+    r = _TestResult()
 
     print("\n--- Basic Timing ---")
     test_no_ping_before_delay(r)

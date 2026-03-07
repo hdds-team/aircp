@@ -18,6 +18,7 @@ Usage:
 """
 
 import json
+import os
 import uuid
 import time
 import sys

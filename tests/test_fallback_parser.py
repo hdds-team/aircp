@@ -24,6 +24,8 @@ import sys
 import os
 from pathlib import Path
 
+import pytest
+
 # Add parent to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,7 +35,7 @@ from agents.fallback_parser import FallbackParser, KNOWN_TOOLS
 # =============================================================================
 # Helpers
 # =============================================================================
-class TestResult:
+class _TestResult:
     def __init__(self):
         self.passed = 0
         self.failed = 0
@@ -60,10 +62,16 @@ class TestResult:
         return self.failed == 0
 
 
+@pytest.fixture
+def results():
+    """Provide _TestResult instance for pytest-collected test functions."""
+    return _TestResult()
+
+
 # =============================================================================
 # Tests: Basic extraction
 # =============================================================================
-def test_single_tool_extraction(results: TestResult):
+def test_single_tool_extraction(results: _TestResult):
     """Extract a single tool intent from text."""
     print("\n🔧 Single Tool Extraction:")
 
@@ -99,7 +107,7 @@ limit: 10
         results.fail("limit arg", f"Got {intent['arguments'].get('limit')}")
 
 
-def test_multiple_tools(results: TestResult):
+def test_multiple_tools(results: _TestResult):
     """Extract multiple tool intents from one text block."""
     print("\n🔧 Multiple Tools:")
 
@@ -141,7 +149,7 @@ message: Hello from fallback mode!
         results.fail("Message arg", f"Got {intents[1]['arguments']}")
 
 
-def test_file_read_intent(results: TestResult):
+def test_file_read_intent(results: _TestResult):
     """Extract file_read tool intent."""
     print("\n📖 file_read Intent:")
 
@@ -175,7 +183,7 @@ limit: 50
 # =============================================================================
 # Tests: Argument parsing variants
 # =============================================================================
-def test_equals_sign_args(results: TestResult):
+def test_equals_sign_args(results: _TestResult):
     """Arguments with = instead of : separator."""
     print("\n🔧 Equals Sign Arguments:")
 
@@ -192,7 +200,7 @@ path = /projects/aircp/agents
         results.fail("Equals parsing", f"Got {intents}")
 
 
-def test_quoted_values(results: TestResult):
+def test_quoted_values(results: _TestResult):
     """Arguments with quoted values."""
     print("\n🔧 Quoted Values:")
 
@@ -222,7 +230,7 @@ message: "Hello world! This has: colons inside"
         results.fail("Quoted message", f"Got {args.get('message')}")
 
 
-def test_single_quoted_values(results: TestResult):
+def test_single_quoted_values(results: _TestResult):
     """Arguments with single-quoted values."""
     print("\n🔧 Single Quoted Values:")
 
@@ -248,7 +256,7 @@ message: 'Test message'
 # =============================================================================
 # Tests: Edge cases
 # =============================================================================
-def test_empty_text(results: TestResult):
+def test_empty_text(results: _TestResult):
     """Empty or whitespace-only text → empty list."""
     print("\n⚡ Edge Cases — Empty:")
 
@@ -262,7 +270,7 @@ def test_empty_text(results: TestResult):
             results.fail(f"Empty text ({repr(text)})", f"Got {len(intents)} intents")
 
 
-def test_no_patterns(results: TestResult):
+def test_no_patterns(results: _TestResult):
     """Text without [TOOL:...] patterns → empty list."""
     print("\n⚡ Edge Cases — No Patterns:")
 
@@ -283,7 +291,7 @@ def test_no_patterns(results: TestResult):
             results.fail(f"False positive", f"Found {len(intents)} in: {text[:50]}")
 
 
-def test_unknown_tool_skipped(results: TestResult):
+def test_unknown_tool_skipped(results: _TestResult):
     """Unknown tool names are skipped."""
     print("\n🚫 Unknown Tool Rejection:")
 
@@ -303,7 +311,7 @@ message: This one is valid
         results.fail("Unknown tool", f"Got {intents}")
 
 
-def test_case_insensitive(results: TestResult):
+def test_case_insensitive(results: _TestResult):
     """[TOOL:...] pattern is case-insensitive."""
     print("\n⚡ Case Insensitive:")
 
@@ -318,7 +326,7 @@ def test_case_insensitive(results: TestResult):
             results.fail(f"Pattern '{pattern}'", f"Got {len(intents)} intents")
 
 
-def test_no_space_after_colon(results: TestResult):
+def test_no_space_after_colon(results: _TestResult):
     """[TOOL:name] without space after colon."""
     print("\n⚡ No Space After Colon:")
 
@@ -333,7 +341,7 @@ def test_no_space_after_colon(results: TestResult):
         results.fail("No-space pattern", f"Got {intents}")
 
 
-def test_tool_with_no_args(results: TestResult):
+def test_tool_with_no_args(results: _TestResult):
     """Tool with no arguments at all."""
     print("\n⚡ Tool With No Args:")
 
@@ -348,7 +356,7 @@ def test_tool_with_no_args(results: TestResult):
         results.fail("No args", f"Got {intents}")
 
 
-def test_has_tool_intents_quick_check(results: TestResult):
+def test_has_tool_intents_quick_check(results: _TestResult):
     """Quick check with has_tool_intents()."""
     print("\n⚡ has_tool_intents():")
 
@@ -378,7 +386,7 @@ def test_has_tool_intents_quick_check(results: TestResult):
 # =============================================================================
 # Tests: Type coercion
 # =============================================================================
-def test_type_coercion(results: TestResult):
+def test_type_coercion(results: _TestResult):
     """Integer and string type coercion from param hints."""
     print("\n🔄 Type Coercion:")
 
@@ -402,7 +410,7 @@ limit: 42
         results.fail("str coercion", f"Got {type(args['room'])} {args['room']}")
 
 
-def test_invalid_int_stays_string(results: TestResult):
+def test_invalid_int_stays_string(results: _TestResult):
     """Invalid integer value stays as string."""
     print("\n🔄 Invalid Int Fallback:")
 
@@ -423,7 +431,7 @@ limit: not_a_number
 # =============================================================================
 # Tests: Custom known_tools
 # =============================================================================
-def test_custom_known_tools(results: TestResult):
+def test_custom_known_tools(results: _TestResult):
     """Parser with custom known_tools set."""
     print("\n🛡️ Custom Known Tools:")
 
@@ -446,7 +454,7 @@ path: /projects/aircp/README.md
 # =============================================================================
 # Tests: Integration with ToolRouter
 # =============================================================================
-async def test_fallback_to_router(results: TestResult):
+async def test_fallback_to_router(results: _TestResult):
     """Fallback intents can be passed to ToolRouter.execute()."""
     print("\n🔗 Fallback → Router Integration:")
 
@@ -512,7 +520,7 @@ async def main():
     print("🧪 Fallback Parser P6 — Test Harness")
     print("=" * 60)
 
-    results = TestResult()
+    results = _TestResult()
 
     # Pure parser tests (no async needed)
     test_single_tool_extraction(results)

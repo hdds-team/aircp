@@ -21,6 +21,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
+
 # Add parent to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -39,7 +41,7 @@ from agents.tool_router import TOOL_DEFINITIONS, TOOL_NAMES, ToolRouter
 # =============================================================================
 # Helpers
 # =============================================================================
-class TestResult:
+class _TestResult:
     def __init__(self):
         self.passed = 0
         self.failed = 0
@@ -66,10 +68,16 @@ class TestResult:
         return self.failed == 0
 
 
+@pytest.fixture
+def results():
+    """Provide _TestResult instance for pytest-collected test functions."""
+    return _TestResult()
+
+
 # =============================================================================
 # Tests
 # =============================================================================
-def test_specs_file_exists(results: TestResult):
+def test_specs_file_exists(results: _TestResult):
     """tool_specs.toml must exist next to tool_loader.py."""
     print("\n📄 Specs File:")
 
@@ -79,7 +87,7 @@ def test_specs_file_exists(results: TestResult):
         results.fail("Specs file missing", str(DEFAULT_SPECS_PATH))
 
 
-def test_load_specs(results: TestResult):
+def test_load_specs(results: _TestResult):
     """Load specs and validate structure."""
     print("\n📋 Load Specs:")
 
@@ -113,7 +121,7 @@ def test_load_specs(results: TestResult):
                 results.fail(f"'{spec.name}' HTTP config", "Missing http_method or http_path")
 
 
-def test_params(results: TestResult):
+def test_params(results: _TestResult):
     """Validate parameter specs."""
     print("\n🔧 Parameter Specs:")
 
@@ -151,7 +159,7 @@ def test_params(results: TestResult):
         results.fail("file_read.limit default", f"Got {limit_param.default if limit_param else 'None'}")
 
 
-def test_ollama_generation(results: TestResult):
+def test_ollama_generation(results: _TestResult):
     """Test Ollama definition generation format."""
     print("\n🔄 Ollama Definition Generation:")
 
@@ -193,7 +201,7 @@ def test_ollama_generation(results: TestResult):
             results.fail(f"'{name}' required", f"Expected list, got {type(req)}")
 
 
-def test_round_trip_consistency(results: TestResult):
+def test_round_trip_consistency(results: _TestResult):
     """Generated definitions must match what ToolRouter exposes."""
     print("\n🔁 Round-Trip Consistency:")
 
@@ -222,7 +230,7 @@ def test_round_trip_consistency(results: TestResult):
         results.fail("TOOL_NAMES mismatch", f"{TOOL_NAMES} vs {get_tool_names(specs)}")
 
 
-def test_handler_map(results: TestResult):
+def test_handler_map(results: _TestResult):
     """Test handler map generation."""
     print("\n🗺️ Handler Map:")
 
@@ -249,7 +257,7 @@ def test_handler_map(results: TestResult):
             results.fail(f"'{name}' handler", "Should be 'filesystem'")
 
 
-def test_error_handling(results: TestResult):
+def test_error_handling(results: _TestResult):
     """Test error cases: missing file, bad format."""
     print("\n⚠️ Error Handling:")
 
@@ -297,7 +305,7 @@ def test_error_handling(results: TestResult):
         bad_handler.unlink(missing_ok=True)
 
 
-def test_router_integration(results: TestResult):
+def test_router_integration(results: _TestResult):
     """ToolRouter must work correctly with loader-generated definitions."""
     print("\n🔗 Router Integration:")
 
@@ -335,7 +343,7 @@ def main():
     print("🧪 Tool Loader P5 — Test Harness")
     print("=" * 60)
 
-    results = TestResult()
+    results = _TestResult()
 
     test_specs_file_exists(results)
     test_load_specs(results)

@@ -24,6 +24,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
+
 # Add parent to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -41,7 +43,7 @@ TEST_ROOM = "#general"
 # =============================================================================
 # Helpers
 # =============================================================================
-class TestResult:
+class _TestResult:
     def __init__(self):
         self.passed = 0
         self.failed = 0
@@ -66,6 +68,12 @@ class TestResult:
                 print(f"  - {name}: {reason}")
         print(f"{'='*60}")
         return self.failed == 0
+
+
+@pytest.fixture
+def results():
+    """Provide _TestResult instance for pytest-collected test functions."""
+    return _TestResult()
 
 
 # =============================================================================
@@ -124,7 +132,7 @@ def cleanup_fixtures():
 # =============================================================================
 # Tests
 # =============================================================================
-async def test_sandbox_validation(results: TestResult):
+async def test_sandbox_validation(results: _TestResult):
     """Test sandbox path validation."""
     print("\n🔒 Sandbox Validation:")
 
@@ -151,7 +159,7 @@ async def test_sandbox_validation(results: TestResult):
             results.ok(f"Escape blocked: {path}")
 
 
-async def test_tool_definitions(results: TestResult):
+async def test_tool_definitions(results: _TestResult):
     """Test tool definitions structure."""
     print("\n📋 Tool Definitions:")
 
@@ -179,7 +187,7 @@ async def test_tool_definitions(results: TestResult):
             results.fail(f"Tool '{name}' structure", "Missing description or parameters")
 
 
-async def test_whitelist(results: TestResult):
+async def test_whitelist(results: _TestResult):
     """Test tool whitelist enforcement."""
     print("\n🛡️ Whitelist Enforcement:")
 
@@ -204,7 +212,7 @@ async def test_whitelist(results: TestResult):
         results.fail("Whitelist exec", f"Should have rejected aircp_send: {result}")
 
 
-async def test_file_read(results: TestResult):
+async def test_file_read(results: _TestResult):
     """Test file_read tool."""
     print("\n📖 file_read:")
 
@@ -248,7 +256,7 @@ async def test_file_read(results: TestResult):
         results.fail("Missing path", "Should have failed")
 
 
-async def test_binary_detection(results: TestResult):
+async def test_binary_detection(results: _TestResult):
     """Test binary file detection (P3)."""
     print("\n🔍 Binary Detection (P3):")
 
@@ -315,7 +323,7 @@ async def test_binary_detection(results: TestResult):
         results.fail("Script read", f"Should accept script: {result}")
 
 
-async def test_binary_extensions_set(results: TestResult):
+async def test_binary_extensions_set(results: _TestResult):
     """Test BINARY_EXTENSIONS set integrity."""
     print("\n📦 Binary Extensions Set:")
 
@@ -336,7 +344,7 @@ async def test_binary_extensions_set(results: TestResult):
         results.fail("Text extensions in binary set", str(overlap))
 
 
-async def test_file_list(results: TestResult):
+async def test_file_list(results: _TestResult):
     """Test file_list tool."""
     print("\n📂 file_list:")
 
@@ -364,7 +372,7 @@ async def test_file_list(results: TestResult):
         results.fail("Sandbox escape (file_list)", str(result))
 
 
-async def test_aircp_history(results: TestResult):
+async def test_aircp_history(results: _TestResult):
     """Test aircp_history tool (requires daemon)."""
     print("\n📜 aircp_history:")
 
@@ -386,7 +394,7 @@ async def test_aircp_history(results: TestResult):
         results.fail("Limit clamp", str(result.get("error")))
 
 
-async def test_aircp_send(results: TestResult):
+async def test_aircp_send(results: _TestResult):
     """Test aircp_send tool (requires daemon)."""
     print("\n📤 aircp_send:")
 
@@ -410,7 +418,7 @@ async def test_aircp_send(results: TestResult):
         results.fail("Empty message", str(result))
 
 
-async def test_unknown_tool(results: TestResult):
+async def test_unknown_tool(results: _TestResult):
     """Test unknown tool rejection."""
     print("\n🚫 Unknown Tool:")
 
@@ -433,7 +441,7 @@ async def main():
     print(f"Daemon: {DAEMON_URL}")
     print(f"Agent: {AGENT_ID}")
 
-    results = TestResult()
+    results = _TestResult()
 
     # Setup fixtures for binary tests
     print("\n⚙️ Setup:")
