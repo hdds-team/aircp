@@ -90,22 +90,32 @@ def _normalize_ts(ts) -> float:
     """Normalize a timestamp to float seconds since epoch.
 
     Handles mixed types found in envelopes:
-    - int nanoseconds (from time.time_ns(), e.g. 1741000000000000000)
-    - int seconds (from time.time(), e.g. 1741000000)
-    - str ISO8601 (from datetime.isoformat(), e.g. "2026-03-08T10:00:00+00:00")
-    - str SQLite format (from _sqlite_now(), e.g. "2026-03-08 10:00:00")
+    - int nanoseconds (>1e18, from time.time_ns())
+    - int microseconds (>1e15)
+    - int milliseconds (>1e12)
+    - int/float seconds
+    - str ISO8601 (from datetime.isoformat())
+    - str SQLite format (from _sqlite_now(), "YYYY-MM-DD HH:MM:SS")
+
+    Thresholds aligned with compact_engine._parse_timestamp().
     """
     if isinstance(ts, (int, float)):
-        if ts > 1e15:  # nanoseconds
-            return ts / 1e9
-        return float(ts)
+        if ts > 1e18:
+            return ts / 1e9   # nanoseconds
+        if ts > 1e15:
+            return ts / 1e6   # microseconds
+        if ts > 1e12:
+            return ts / 1e3   # milliseconds
+        return float(ts)      # seconds
     if isinstance(ts, str) and ts:
         try:
-            # ISO8601 with timezone
             from datetime import datetime, timezone
             clean = ts.replace('Z', '+00:00')
             if 'T' in clean:
-                return datetime.fromisoformat(clean).timestamp()
+                dt = datetime.fromisoformat(clean)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
             # SQLite format: "YYYY-MM-DD HH:MM:SS" (assume UTC)
             return datetime.strptime(clean, '%Y-%m-%d %H:%M:%S').replace(
                 tzinfo=timezone.utc).timestamp()
