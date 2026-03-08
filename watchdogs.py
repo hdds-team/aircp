@@ -27,34 +27,13 @@ from aircp_daemon import (
     WORKFLOW_WATCHDOG_INTERVAL,
     REVIEW_WATCHDOG_INTERVAL, REVIEW_PING_DELAY, REVIEW_PING_INTERVAL,
     REVIEW_PING_MAX, REVIEW_ESCALATE_SECONDS,
-    TASK_WATCHDOG_INTERVAL, DB_BACKUP_INTERVAL,
+    TASK_WATCHDOG_INTERVAL,
     _SYSTEM_BOTS,
 )
 from tip_system import TIPS_WATCHDOG_INTERVAL
 from workflow_scheduler import MAX_TIMEOUT_NOTIFS
 
 logger = logging.getLogger("aircp_daemon")
-
-
-# =============================================================================
-# v3.1 Periodic DB backup (RAM -> disk)
-# =============================================================================
-
-def db_backup_loop():
-    """Background thread: persist RAM DB to disk every DB_BACKUP_INTERVAL seconds.
-
-    Prevents data loss when daemon crashes or is killed without clean shutdown.
-    Without this, only SIGTERM/SIGINT triggers persist_to_disk().
-    """
-    print(f"[BACKUP] Periodic DB backup started (every {DB_BACKUP_INTERVAL}s)")
-    while True:
-        time.sleep(DB_BACKUP_INTERVAL)
-        try:
-            if storage:
-                storage.persist_to_disk()
-                print(f"[BACKUP] DB persisted to disk")
-        except Exception as e:
-            print(f"[BACKUP] Failed to persist DB: {e}")
 
 
 # =============================================================================
@@ -829,12 +808,6 @@ def start_watchdogs(storage_ref):
     storage_ref is passed explicitly to gc_loop (it was a closure param).
     """
     threads = {}
-
-    # DB backup (crash protection)
-    t = threading.Thread(target=db_backup_loop, daemon=True)
-    t.start()
-    threads["db_backup"] = t
-    print(f"DB backup started (v3.1 - every {DB_BACKUP_INTERVAL}s)")
 
     # Task watchdog (stale task detection + pinging)
     t = threading.Thread(target=task_watchdog, daemon=True)

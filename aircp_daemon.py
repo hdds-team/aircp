@@ -69,7 +69,6 @@ from daemon_config import (
     COMPACT_AUTO_THRESHOLD, COMPACT_AUTO_INTERVAL,
     TASK_STALE_SECONDS, TASK_WATCHDOG_INTERVAL, TASK_MIN_PING_INTERVAL, TASK_MAX_PINGS,
     TASK_LEAD_WAKEUP_PINGS, TASK_LEAD_ID, TASK_LEAD_STALE_MINUTES,
-    DB_BACKUP_INTERVAL,
     AGENT_AWAY_SECONDS, AGENT_DEAD_SECONDS, AGENT_HEARTBEAT_CHECK_INTERVAL,
     BRAINSTORM_WATCHDOG_INTERVAL, BRAINSTORM_REMINDER_INTERVAL, BRAINSTORM_MAX_REMINDERS,
     HUMAN_AGENTS,
@@ -87,6 +86,34 @@ _last_compact_time = {}    # room -> last compact timestamp
 _compact_lock = threading.Lock()
 
 
+def _normalize_ts(ts) -> float:
+    """Normalize a timestamp to float seconds since epoch.
+
+    Handles mixed types found in envelopes:
+    - int nanoseconds (from time.time_ns(), e.g. 1741000000000000000)
+    - int seconds (from time.time(), e.g. 1741000000)
+    - str ISO8601 (from datetime.isoformat(), e.g. "2026-03-08T10:00:00+00:00")
+    - str SQLite format (from _sqlite_now(), e.g. "2026-03-08 10:00:00")
+    """
+    if isinstance(ts, (int, float)):
+        if ts > 1e15:  # nanoseconds
+            return ts / 1e9
+        return float(ts)
+    if isinstance(ts, str) and ts:
+        try:
+            # ISO8601 with timezone
+            from datetime import datetime, timezone
+            clean = ts.replace('Z', '+00:00')
+            if 'T' in clean:
+                return datetime.fromisoformat(clean).timestamp()
+            # SQLite format: "YYYY-MM-DD HH:MM:SS" (assume UTC)
+            return datetime.strptime(clean, '%Y-%m-%d %H:%M:%S').replace(
+                tzinfo=timezone.utc).timestamp()
+        except (ValueError, TypeError):
+            pass
+    return 0.0
+
+
 def _envelopes_to_messages(envelopes: list, room: str = "") -> list:
     """Convert storage envelope format to compact_engine message format.
     Shared helper to avoid code duplication between auto-trigger and POST /compact.
@@ -101,7 +128,7 @@ def _envelopes_to_messages(envelopes: list, room: str = "") -> list:
             "id": env.get("id", ""),
             "from": from_id,
             "content": content,
-            "timestamp": env.get("ts", 0),
+            "timestamp": _normalize_ts(env.get("ts", 0)),
             "room": room,
         })
     return messages
@@ -130,11 +157,11 @@ def _shutdown_handler(signum, frame):
     except Exception as e:
         print(f"[SHUTDOWN] Failed to broadcast: {e}")
 
-    # Persist DB
-    print("[SHUTDOWN] Persisting database...")
+    # Close DB (WAL checkpoint + close connection)
+    print("[SHUTDOWN] Closing database...")
     if _storage is not None:
-        _storage.persist_to_disk()
-        print("[SHUTDOWN] Database persisted to disk")
+        _storage.close()
+        print("[SHUTDOWN] Database closed")
 
     print("[SHUTDOWN] Goodbye!")
     sys.exit(0)
@@ -1023,9 +1050,9 @@ def main():
 
     # v0.6/v0.7: Initialize storage for TaskManager (RAM mode with disk persistence)
     global _storage
-    _storage = AIRCPStorage()  # Defaults to /dev/shm with disk backup
+    _storage = AIRCPStorage()  # Disk-based SQLite with WAL mode
     storage = _storage  # Local alias for existing code
-    print("v0.7 TaskManager enabled (RAM storage: /dev/shm)")
+    print("v0.7 TaskManager enabled (disk SQLite + WAL)")
 
     # v3.0: Rebuild FTS5 index from existing messages
     storage.rebuild_fts()
@@ -1039,7 +1066,7 @@ def main():
     # Register shutdown handlers to persist DB on exit
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGINT, _shutdown_handler)
-    print("Shutdown handlers registered (SIGTERM/SIGINT → persist DB)")
+    print("Shutdown handlers registered (SIGTERM/SIGINT)")
 
     # v4.1: Load agent profiles for adaptive timers
     load_agent_profiles()

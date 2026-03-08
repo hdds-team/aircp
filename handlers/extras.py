@@ -217,36 +217,13 @@ def get_notifications_stats(handler, parsed, params):
 # ---------------------------------------------------------------------------
 
 def post_agent_heartbeat(handler, body):
-    try:
-        agent_id = body.get("agent_id")
-        status = body.get("status", "idle")
-        current_task = body.get("current_task")
+    """Alias for /heartbeat — delegates to autonomy handler.
 
-        if not agent_id:
-            handler.send_json({"error": "Missing 'agent_id' field"}, 400)
-            return
-
-        valid_statuses = ["idle", "working", "reviewing", "blocked", "away"]
-        if status not in valid_statuses:
-            handler.send_json({"error": f"Invalid status. Must be one of: {valid_statuses}"}, 400)
-            return
-
-        capacity = body.get("capacity", 1)
-        success = storage.update_agent_presence(agent_id, status, current_task, capacity=capacity)
-
-        if success:
-            handler.send_json({
-                "status": "ok",
-                "agent_id": agent_id,
-                "presence_status": status,
-                "current_task": current_task,
-                "capacity": capacity
-            })
-        else:
-            handler.send_json({"error": "Failed to update presence"}, 500)
-
-    except Exception as e:
-        handler.send_json({"error": str(e)}, 500)
+    Both endpoints now update autonomy state + storage.
+    Kept for backward compat (base_agent.py uses /agent/heartbeat).
+    """
+    from handlers.autonomy import post_heartbeat
+    post_heartbeat(handler, body)
 
 
 def post_compact(handler, body):

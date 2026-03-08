@@ -42,9 +42,6 @@ TASK_LEAD_WAKEUP_PINGS = 2    # Notify lead after this many pings without respon
 TASK_LEAD_ID = _ucfg.user()   # Who to notify when tasks are stuck
 TASK_LEAD_STALE_MINUTES = 15  # Also notify lead if task inactive >15min total
 
-# v3.1: Periodic DB backup (RAM -> disk)
-DB_BACKUP_INTERVAL = 60       # 1 minute
-
 
 # ---------------------------------------------------------------------------
 # Agent Heartbeat (v0.9)

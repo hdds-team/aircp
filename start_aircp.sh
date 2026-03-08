@@ -34,6 +34,15 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     set +a
 fi
 
+# Add HDDS Python SDK to PYTHONPATH if configured
+if [ -n "$HDDS_SDK_PATH" ]; then
+    export PYTHONPATH="${HDDS_SDK_PATH}:${PYTHONPATH}"
+fi
+# Re-export LD_LIBRARY_PATH after .env override
+if [ -n "$HDDS_LIB_PATH" ]; then
+    export LD_LIBRARY_PATH="${HDDS_LIB_PATH}:${LD_LIBRARY_PATH}"
+fi
+
 HDDS_WS_DIR="${HDDS_WS_DIR:-$SCRIPT_DIR/lib/hdds-ws}"
 HDDS_WS_BIN=$HDDS_WS_DIR/target/release/hdds-ws
 HDDS_WS_CMD="test -x $HDDS_WS_BIN && $HDDS_WS_BIN --domain $AIRCP_DOMAIN_ID || (cd $HDDS_WS_DIR && cargo run --release -- --domain $AIRCP_DOMAIN_ID)"
@@ -139,7 +148,7 @@ case "${1:-help}" in
     all)
         echo "Starting full AIRCP stack in tmux..."
         # Unset Claude Code env vars to avoid "nested session" error when launched from CC
-        ENV_VARS="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; HDDS_REUSEPORT=1 HDDS_LIB_PATH=$HDDS_LIB_PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH MISTRAL_API_KEY=$MISTRAL_API_KEY FORUM_API_URL=$FORUM_API_URL"
+        ENV_VARS="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; HDDS_REUSEPORT=1 HDDS_LIB_PATH=$HDDS_LIB_PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH PYTHONPATH=$PYTHONPATH MISTRAL_API_KEY=$MISTRAL_API_KEY FORUM_API_URL=$FORUM_API_URL"
 
         # Kill any orphan processes before starting fresh
         pkill -f "heartbeat.py --agent" 2>/dev/null || true
@@ -239,7 +248,7 @@ case "${1:-help}" in
             # Start in new tmux window if session exists
             if tmux has-session -t aircp 2>/dev/null; then
                 # Unset Claude Code env vars to avoid "nested session" error when launched from CC
-        ENV_VARS="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; HDDS_REUSEPORT=1 HDDS_LIB_PATH=$HDDS_LIB_PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH MISTRAL_API_KEY=$MISTRAL_API_KEY FORUM_API_URL=$FORUM_API_URL"
+        ENV_VARS="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; HDDS_REUSEPORT=1 HDDS_LIB_PATH=$HDDS_LIB_PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH PYTHONPATH=$PYTHONPATH MISTRAL_API_KEY=$MISTRAL_API_KEY FORUM_API_URL=$FORUM_API_URL"
                 case "$AGENT" in
                     daemon)
                         tmux new-window -t aircp -n daemon \

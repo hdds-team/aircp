@@ -298,6 +298,13 @@ def compact_messages(
     max_age = timedelta(minutes=profile.get("max_age_minutes", 60))
     max_messages = profile.get("max_messages_before_compact", 60)
 
+    # Sort key: handle mixed timestamp types (int, float, str) safely
+    def _safe_ts(m):
+        ts = m.get("timestamp", 0)
+        if isinstance(ts, (int, float)):
+            return float(ts)
+        return 0.0
+
     # Step 1: Classify all messages
     classified = []
     for msg in messages:
@@ -352,7 +359,7 @@ def compact_messages(
     # Keep the most recent compactable messages
     to_compact_sorted = sorted(
         to_compact,
-        key=lambda m: m.get("timestamp", 0),
+        key=_safe_ts,
         reverse=True,
     )
     kept_from_compact = to_compact_sorted[:n_keep_from_compact]
@@ -372,7 +379,7 @@ def compact_messages(
     summary = _generate_summary(actually_compacted, to_delete, profile)
 
     # Step 7: Sort kept messages by timestamp
-    kept.sort(key=lambda m: m.get("timestamp", 0))
+    kept.sort(key=_safe_ts)
 
     total_after = len(kept) + (1 if summary else 0)
 

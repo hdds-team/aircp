@@ -203,9 +203,9 @@ def post_daemon_restart(handler, body):
             from_id="@system"
         )
 
-        # Persist DB before restart
+        # Close DB cleanly before restart
         if _storage is not None:
-            _storage.persist_to_disk()
+            _storage.close()
 
         handler.send_json({
             "restarted": True,

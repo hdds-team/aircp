@@ -125,6 +125,9 @@ class DashboardBridge:
         except Exception:
             return
 
+        if not agent_list:
+            return
+
         for agent in agent_list:
             agent_id = agent.get("agent_id") or agent.get("id", "")
             if not agent_id or not agent_id.startswith("@"):
@@ -135,10 +138,12 @@ class DashboardBridge:
             seconds_ago = float('inf')
             if last_seen:
                 try:
-                    from datetime import datetime
+                    from datetime import datetime, timezone
                     if isinstance(last_seen, str):
                         dt = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
-                        seconds_ago = (datetime.now(dt.tzinfo) - dt).total_seconds()
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        seconds_ago = (datetime.now(timezone.utc) - dt).total_seconds()
                     elif isinstance(last_seen, (int, float)):
                         seconds_ago = time.time() - last_seen
                 except Exception:

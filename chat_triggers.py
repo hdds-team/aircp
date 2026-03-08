@@ -110,13 +110,14 @@ def _run_auto_compact(room: str, transport_ref, storage_ref):
                 compression_ratio=result.get("compression_ratio", "?"),
                 summary=summary,
             )
-        _compact_msg_counter[room] = 0
-        _last_compact_time[room] = time.time()
         ratio = result.get("compression_ratio", "?") if result else "skip"
         logger.info(f"[COMPACTv3] Auto-compacted {room}: {ratio}")
     except Exception as e:
         logger.error(f"[COMPACTv3] Auto-compact error for {room}: {e}")
     finally:
+        # Always reset counter/timer to prevent infinite retry on failure
+        _compact_msg_counter[room] = 0
+        _last_compact_time[room] = time.time()
         _compact_lock.release()
 
 

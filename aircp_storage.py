@@ -13,31 +13,22 @@ Stores messages for:
 - Brainstorm sessions (v1.0)
 
 Storage strategy:
-- Runtime: /dev/shm (RAM) for zero disk I/O
-- Startup: load from disk if exists
-- Shutdown: persist to disk (signal handler)
+- Direct SQLite on disk with WAL mode (v5.0 - replaced /dev/shm model)
+- WAL provides concurrent reads + fast writes without RAM copy overhead
+- No shm/disk sync needed, no shutil.copy2 fragility
 """
 import sqlite3
-import shutil
 import json
 import logging
 import tomllib
 import threading as _threading
-import time as _time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# v3.4: Critical write persistence - throttle to avoid excessive disk I/O
-# After status-changing operations (task complete, review approve/close, brainstorm close),
-# persist RAM DB to disk immediately. Throttled to max once per N seconds.
-CRITICAL_PERSIST_THROTTLE = 10  # seconds - min interval between critical persists
-
-# RAM-based runtime path (tmpfs, zero disk I/O)
-RAM_DB_PATH = Path("/dev/shm/aircp.db")
-# Persistent disk path for shutdown/startup
+# Database path (disk-based with WAL mode)
 DISK_DB_PATH = Path("aircp.db")
 
 
@@ -54,40 +45,28 @@ def _sqlite_to_iso8601(sqlite_ts: str) -> str:
 
 
 class AIRCPStorage:
-    """SQLite-based message storage - runs in RAM, persists on shutdown"""
+    """SQLite-based message storage with WAL mode (disk-direct, no shm copy)"""
 
     def __init__(self, db_path: str = None, use_ram: bool = True):
         """
         Initialize storage.
 
         Args:
-            db_path: Override path (for tests). If None, uses RAM/disk strategy.
-            use_ram: If True, use /dev/shm for runtime (default). False for tests.
+            db_path: Override path (for tests). If None, uses DISK_DB_PATH.
+            use_ram: Deprecated, ignored. Kept for API compat.
         """
         if db_path is not None:
-            # Explicit path (tests)
-            self.ram_path = Path(db_path)
-            self.disk_path = Path(db_path)
-            self._use_ram = False
-        elif use_ram and RAM_DB_PATH.parent.exists():
-            # Production: RAM + disk persistence
-            self.ram_path = RAM_DB_PATH
-            self.disk_path = DISK_DB_PATH
-            self._use_ram = True
+            self.db_path = Path(db_path)
         else:
-            # Fallback: disk only
-            self.ram_path = DISK_DB_PATH
-            self.disk_path = DISK_DB_PATH
-            self._use_ram = False
+            self.db_path = DISK_DB_PATH
 
-        self.db_path = self.ram_path  # Active path
+        # Back-compat aliases (used by some callers)
+        self.disk_path = self.db_path
 
         # Single shared connection + lock (replaces leaky per-thread pattern)
         self._conn_lock = _threading.Lock()
         self._conn: sqlite3.Connection | None = None
 
-        # Load from disk to RAM on startup
-        self._load_from_disk()
         self.init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -96,10 +75,6 @@ class AIRCPStorage:
         Single connection with WAL mode. All callers share one connection;
         the _conn_lock in each method serializes writes. SQLite WAL handles
         concurrent reads internally.
-
-        Previous per-thread pattern leaked FDs because HTTPServer creates
-        a new thread per request -- each opened a connection via
-        threading.local() that was never closed when the thread died.
         """
         if self._conn is None:
             with self._conn_lock:
@@ -113,64 +88,36 @@ class AIRCPStorage:
                     self._conn.execute("PRAGMA busy_timeout=5000")
         return self._conn
 
-    def _load_from_disk(self):
-        """Load database from disk to RAM on startup."""
-        if not self._use_ram:
-            return
-
-        if self.disk_path.exists():
-            # Copy disk → RAM
-            shutil.copy2(self.disk_path, self.ram_path)
-            logger.info(f"Loaded DB from disk: {self.disk_path} → {self.ram_path}")
-        else:
-            logger.info(f"No existing DB on disk, starting fresh in RAM")
-
     def persist_to_disk(self):
-        """Persist RAM database to disk. Call on shutdown."""
-        if not self._use_ram:
-            return
+        """Legacy no-op. DB is already on disk with WAL mode.
 
-        # Checkpoint WAL to main DB before copy
-        conn = self._get_conn()
+        Kept for API compat -- callers that still call this are harmless.
+        Does a WAL checkpoint to merge WAL into main DB file.
+        """
         try:
+            conn = self._get_conn()
             conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
         except Exception as e:
             logger.warning(f"WAL checkpoint failed: {e}")
 
-        if self.ram_path.exists():
-            # Copy RAM → disk (also copy WAL/SHM if present)
-            shutil.copy2(self.ram_path, self.disk_path)
-            logger.info(f"Persisted DB to disk: {self.ram_path} → {self.disk_path}")
-
     def _persist_critical(self, reason: str = ""):
-        """v3.4: Persist RAM DB to disk after critical state changes.
+        """Legacy no-op. DB writes go to disk immediately via WAL.
 
-        Called after operations that change final status (task complete,
-        review approve/close, brainstorm close). Throttled to avoid
-        excessive I/O — max once per CRITICAL_PERSIST_THROTTLE seconds.
-
-        This prevents data loss when daemon restarts before the next
-        periodic backup (DB_BACKUP_INTERVAL).
+        Kept for API compat -- callers (task complete, review close, etc.)
+        still call this but it does nothing harmful.
         """
-        if not self._use_ram:
-            return
-
-        now = _time.monotonic()
-        last = getattr(self, '_last_critical_persist', 0)
-        if now - last < CRITICAL_PERSIST_THROTTLE:
-            logger.debug(f"Skipping critical persist (throttled): {reason}")
-            return
-
-        self._last_critical_persist = now
-        try:
-            self.persist_to_disk()
-            logger.info(f"Critical persist to disk: {reason}")
-        except Exception as e:
-            logger.error(f"Critical persist failed ({reason}): {e}")
+        pass
 
     def close(self):
-        """Persist to disk on shutdown."""
-        self.persist_to_disk()
+        """Checkpoint WAL and close connection on shutdown."""
+        if self._conn is not None:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self._conn.close()
+            except Exception as e:
+                logger.warning(f"Error during close: {e}")
+            finally:
+                self._conn = None
 
     def init_db(self):
         """Initialize database schema"""
@@ -2611,8 +2558,7 @@ class AIRCPStorage:
             "blockers": []
         }
 
-    # NOTE: close() is defined at L118 and calls persist_to_disk().
-    # The duplicate empty close() that was here has been removed (P3 fix).
+    # NOTE: close() is defined at top and checkpoints WAL + closes connection.
 
 
 if __name__ == "__main__":
