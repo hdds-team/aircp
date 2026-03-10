@@ -21,6 +21,8 @@ from aircp_daemon import (
     get_brainstorm_config, get_agent_dead_seconds, get_agent_away_seconds,
     TASK_STALE_SECONDS, TASK_MIN_PING_INTERVAL, TASK_MAX_PINGS,
     TASK_LEAD_ID, TASK_LEAD_WAKEUP_PINGS,
+    TASK_PENDING_WARN_SECONDS, TASK_PENDING_ESCALATE_SECONDS,
+    TASK_PENDING_MAX_PINGS, TASK_PENDING_MIN_PING_INTERVAL,
     AGENT_AWAY_SECONDS, AGENT_DEAD_SECONDS, AGENT_HEARTBEAT_CHECK_INTERVAL,
     BRAINSTORM_WATCHDOG_INTERVAL, BRAINSTORM_REMINDER_INTERVAL,
     BRAINSTORM_MAX_REMINDERS, HUMAN_AGENTS,
@@ -47,9 +49,10 @@ def task_watchdog():
     - A task has been pinged TASK_LEAD_WAKEUP_PINGS times without response
     - A task is about to be marked as stale
     """
-    print("[WATCHDOG] Task watchdog started (v0.8 with lead wake-up)")
+    print("[WATCHDOG] Task watchdog started (v4.5 with lead wake-up + pending reminder)")
     print(f"[WATCHDOG] Lead wake-up: {TASK_LEAD_ID} after {TASK_LEAD_WAKEUP_PINGS} pings")
 
+    escalated_pending = set()  # v4.5: track task_ids already escalated to lead (no infinite spam)
     while True:
         try:
             if storage:
@@ -129,6 +132,64 @@ def task_watchdog():
                         "count": marked,
                         "max_pings": TASK_MAX_PINGS,
                     })
+
+                # =============================================================
+                # v4.3: Pending task reminder (unclaimed tasks)
+                # Pings the assigned agent if a task sits in 'pending' too long.
+                # Escalates to lead after TASK_PENDING_ESCALATE_SECONDS.
+                # =============================================================
+                pending_tasks = storage.get_stale_pending_tasks(
+                    pending_seconds=TASK_PENDING_WARN_SECONDS,
+                    min_ping_interval=TASK_PENDING_MIN_PING_INTERVAL,
+                )
+                for task in pending_tasks:
+                    agent_id = task.get("agent_id", "")
+                    task_id = task.get("id")
+
+                    # v4.5: Guard against empty agent_id (broken mention)
+                    if not agent_id:
+                        continue
+
+                    description = task.get("description", "")[:50]
+                    ping_count = task.get("ping_count", 0)
+                    created_at = task.get("created_at", "")
+
+                    # Check if past escalation threshold
+                    try:
+                        age_seconds = storage._seconds_since(created_at)
+                    except Exception:
+                        # v4.5: Fail-safe -- assume old = escalate (not new = silence)
+                        # Use finite sentinel (> ESCALATE threshold) so int() works in msgs
+                        age_seconds = TASK_PENDING_ESCALATE_SECONDS + 1
+
+                    # v4.5: Sanitize inf/NaN from _seconds_since (returns inf on parse error)
+                    if not (0 <= age_seconds < 1e9):
+                        age_seconds = TASK_PENDING_ESCALATE_SECONDS + 1
+
+                    if ping_count >= TASK_PENDING_MAX_PINGS or age_seconds >= TASK_PENDING_ESCALATE_SECONDS:
+                        # v4.5: Stop condition -- only escalate once per task
+                        if task_id in escalated_pending:
+                            continue
+                        escalated_pending.add(task_id)
+                        # Escalate to lead
+                        msg = f"\U0001f4e2 {TASK_LEAD_ID}: Task #{task_id} assigned to @{agent_id.lstrip('@')} is unclaimed for {int(age_seconds // 60)}min! ({description}...)"
+                        print(f"[WATCHDOG] Pending escalation: task #{task_id} -> {TASK_LEAD_ID}")
+                    else:
+                        # NOTE: No recently_active guard here -- pending tasks have no
+                        # task/activity by definition (not claimed yet), so the concept
+                        # of "recent activity" doesn't apply.
+                        # Nudge the assigned agent
+                        msg = f"\U0001f4cb @{agent_id.lstrip('@')}: Task #{task_id} is waiting for you! ({description}...) [pending {int(age_seconds // 60)}min]"
+                        print(f"[WATCHDOG] Pending nudge: task #{task_id} -> {agent_id}")
+
+                    storage.update_task_pinged(task_id)
+
+                    if transport:
+                        try:
+                            ensure_room("#general")
+                            _bot_send("#general", msg, from_id="@taskman", context_agent=agent_id)
+                        except Exception as e:
+                            print(f"[WATCHDOG] Failed to send pending reminder: {e}")
 
         except Exception as e:
             print(f"[WATCHDOG] Error: {e}")
