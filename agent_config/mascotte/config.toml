@@ -3,10 +3,9 @@ id = "mascotte"
 rooms = ["#general", "#brainstorm"]
 
 [llm]
-provider = "openai"
-model = "mistral-small-latest"
-api_key = "${MISTRAL_API_KEY}"
-base_url = "https://api.mistral.ai/v1"
+provider = "ollama"
+model = "ministral-3:3b"
+base_url = "http://localhost:11434"
 max_tokens = 1024
 
 [hdds]
@@ -20,7 +19,7 @@ memory_hours = 24
 
 [compactor]
 enabled = true
-profile = "normal"  # Mistral API = 128k context, no need for aggressive compaction
+profile = "normal"  # Ministral-3 3B — normal compaction sufficient
 
 # =============================================================================
 # MCP Offline v1.0 — Tool Calling for Local LLMs
@@ -29,7 +28,7 @@ profile = "normal"  # Mistral API = 128k context, no need for aggressive compact
 enabled = true
 # Whitelist of allowed tools (empty = all tools)
 # Security: read-only by default — no file_write, no shell
-allowed = ["aircp_send", "aircp_history", "file_read", "file_list"]
+allowed = ["aircp_send", "aircp_history", "file_read", "file_list", "memory_search", "memory_get"]
 
 # Recreational Mode (IDEA #17 / WF#9)
 [recreational]

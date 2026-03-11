@@ -797,8 +797,12 @@ class PersistentAgent(TaskWorkerMixin, ABC):
                                 self.recreational.record_post()
                                 logger.info(f"[recreational] Posted to forum: {post_id}")
                             else:
-                                logger.warning("[recreational] Forum post failed, skipping")
+                                # Record anyway to trigger cooldown and avoid spam loop
+                                self.recreational.record_post()
+                                logger.warning("[recreational] Forum post failed, cooldown applied")
                     except Exception as e:
+                        # Reset idle to avoid immediate re-trigger on LLM failure
+                        self.recreational.state.idle_cycles = 0
                         logger.warning(f"[recreational] LLM generation failed: {e}")
 
             # Persist recreational state

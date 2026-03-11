@@ -95,3 +95,6 @@ tool = "devit_db_query"
 
 [[capabilities]]
 tool = "devit_journal_append"
+
+[[capabilities]]
+tool = "devit_aircp"

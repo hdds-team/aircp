@@ -101,6 +101,9 @@ tool = "devit_db_query"
 [[capabilities]]
 tool = "devit_journal_append"
 
+[[capabilities]]
+tool = "devit_aircp"
+
 # Recreational Mode (IDEA #17 / WF#9)
 [recreational]
 enabled = true
