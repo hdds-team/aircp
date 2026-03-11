@@ -102,3 +102,9 @@ dist/
 
 ## private
 .gen_token_operator.sh
+
+# Dev-only symlinks (HDDS local build)
+lib/
+
+# Private cluster scripts
+apply_ollama_numctx.sh
