@@ -42,6 +42,12 @@ TASK_LEAD_WAKEUP_PINGS = 2    # Notify lead after this many pings without respon
 TASK_LEAD_ID = _ucfg.user()   # Who to notify when tasks are stuck
 TASK_LEAD_STALE_MINUTES = 15  # Also notify lead if task inactive >15min total
 
+# v4.3: Pending task reminder (unclaimed tasks)
+TASK_PENDING_WARN_SECONDS = 600     # First ping after 10min unclaimed
+TASK_PENDING_ESCALATE_SECONDS = 1800  # Escalate to lead after 30min unclaimed
+TASK_PENDING_MAX_PINGS = 2          # Max pings before escalation (not stale -- just nudge)
+TASK_PENDING_MIN_PING_INTERVAL = 600  # Don't re-ping pending within 10min
+
 
 # ---------------------------------------------------------------------------
 # Agent Heartbeat (v0.9)

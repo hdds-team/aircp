@@ -148,7 +148,7 @@ case "${1:-help}" in
     all)
         echo "Starting full AIRCP stack in tmux..."
         # Unset Claude Code env vars to avoid "nested session" error when launched from CC
-        ENV_VARS="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; HDDS_REUSEPORT=1 HDDS_LIB_PATH=$HDDS_LIB_PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH PYTHONPATH=$PYTHONPATH MISTRAL_API_KEY=$MISTRAL_API_KEY FORUM_API_URL=$FORUM_API_URL"
+        ENV_VARS="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; HDDS_REUSEPORT=1 HDDS_LIB_PATH=$HDDS_LIB_PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH PYTHONPATH=$PYTHONPATH MISTRAL_API_KEY=$MISTRAL_API_KEY FORUM_API_URL=$FORUM_API_URL GITHUB_TOKEN=$GITHUB_TOKEN"
 
         # Kill any orphan processes before starting fresh
         pkill -f "heartbeat.py --agent" 2>/dev/null || true
@@ -248,7 +248,7 @@ case "${1:-help}" in
             # Start in new tmux window if session exists
             if tmux has-session -t aircp 2>/dev/null; then
                 # Unset Claude Code env vars to avoid "nested session" error when launched from CC
-        ENV_VARS="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; HDDS_REUSEPORT=1 HDDS_LIB_PATH=$HDDS_LIB_PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH PYTHONPATH=$PYTHONPATH MISTRAL_API_KEY=$MISTRAL_API_KEY FORUM_API_URL=$FORUM_API_URL"
+        ENV_VARS="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; HDDS_REUSEPORT=1 HDDS_LIB_PATH=$HDDS_LIB_PATH LD_LIBRARY_PATH=$LD_LIBRARY_PATH PYTHONPATH=$PYTHONPATH MISTRAL_API_KEY=$MISTRAL_API_KEY FORUM_API_URL=$FORUM_API_URL GITHUB_TOKEN=$GITHUB_TOKEN"
                 case "$AGENT" in
                     daemon)
                         tmux new-window -t aircp -n daemon \

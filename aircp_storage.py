@@ -497,6 +497,120 @@ class AIRCPStorage:
             "ON llm_usage(agent_id, created_at)"
         )
 
+        # ========== Git Agent Mode Tables (IDEA #5 Phase 1) ==========
+
+        # Git repos -- repository configuration (multi-repo ready)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS git_repos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                owner TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'github',
+                api_url TEXT NOT NULL DEFAULT 'https://api.github.com',
+                html_url TEXT NOT NULL DEFAULT '',
+                default_branch TEXT NOT NULL DEFAULT 'main',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_git_repos_source ON git_repos(source)")
+
+        # Git events -- audit trail for ALL git agent actions
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS git_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id INTEGER,
+                event_type TEXT NOT NULL,
+                actor_id TEXT NOT NULL DEFAULT '',
+                issue_number INTEGER,
+                details TEXT,
+                project_id TEXT DEFAULT 'default',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (repo_id) REFERENCES git_repos(id)
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_git_events_type ON git_events(event_type)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_git_events_repo ON git_events(repo_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_git_events_created ON git_events(created_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_git_events_actor ON git_events(actor_id)")
+
+        # Git issue cache -- cached issues from GitHub for dashboard display
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS git_issue_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id INTEGER NOT NULL,
+                issue_number INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT DEFAULT '',
+                state TEXT NOT NULL DEFAULT 'open',
+                labels TEXT DEFAULT '[]',
+                assignees TEXT DEFAULT '[]',
+                author_login TEXT DEFAULT '',
+                comments_count INTEGER DEFAULT 0,
+                html_url TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                cached_at TEXT NOT NULL,
+                FOREIGN KEY (repo_id) REFERENCES git_repos(id),
+                UNIQUE(repo_id, issue_number)
+            )
+        """)
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_git_issue_cache_repo_state "
+            "ON git_issue_cache(repo_id, state)"
+        )
+
+        # Git actions queue -- pending write actions awaiting dashboard approval
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS git_actions_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id INTEGER NOT NULL,
+                issue_number INTEGER,
+                action_type TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                params TEXT NOT NULL DEFAULT '{}',
+                preview TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                approved_by TEXT,
+                rejected_by TEXT,
+                result TEXT,
+                queued_at TEXT NOT NULL,
+                decided_at TEXT,
+                executed_at TEXT,
+                FOREIGN KEY (repo_id) REFERENCES git_repos(id)
+            )
+        """)
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_git_actions_queue_status "
+            "ON git_actions_queue(status)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_git_actions_queue_repo "
+            "ON git_actions_queue(repo_id)"
+        )
+
+        # Git issue assignments -- agent assignments to issues (dashboard bridge)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS git_issue_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id INTEGER NOT NULL,
+                issue_number INTEGER NOT NULL,
+                agent_id TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'investigate',
+                task_id INTEGER,
+                assigned_by TEXT NOT NULL DEFAULT '@naskel',
+                assigned_at TEXT NOT NULL,
+                FOREIGN KEY (repo_id) REFERENCES git_repos(id),
+                FOREIGN KEY (task_id) REFERENCES agent_tasks(id),
+                UNIQUE(repo_id, issue_number, agent_id)
+            )
+        """)
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_git_issue_assignments_issue "
+            "ON git_issue_assignments(repo_id, issue_number)"
+        )
+
         conn.commit()
 
         logger.info(f"Storage initialized at {self.db_path}")
@@ -861,6 +975,33 @@ class AIRCPStorage:
             return [dict(row) for row in rows]
         except Exception as e:
             logger.error(f"Failed to get stale tasks: {e}")
+            return []
+
+    def get_stale_pending_tasks(self, pending_seconds: int = 600, min_ping_interval: int = 600) -> List[Dict[str, Any]]:
+        """v4.3: Get pending tasks that haven't been claimed after pending_seconds.
+
+        Unlike get_stale_tasks() which only monitors in_progress tasks,
+        this catches tasks that were created but never started.
+        Reuses the same ping_count / last_pinged_at columns.
+        """
+        try:
+            conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("""
+                SELECT * FROM agent_tasks
+                WHERE status = 'pending'
+                AND datetime(created_at) < datetime('now', '-' || ? || ' seconds')
+                AND (
+                    last_pinged_at IS NULL
+                    OR datetime(last_pinged_at) < datetime('now', '-' || ? || ' seconds')
+                )
+                ORDER BY created_at ASC
+            """, (pending_seconds, min_ping_interval))
+            rows = c.fetchall()
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Failed to get stale pending tasks: {e}")
             return []
 
     def mark_stale_tasks_as_stale(self, max_pings: int = 3) -> int:
@@ -2559,6 +2700,492 @@ class AIRCPStorage:
         }
 
     # NOTE: close() is defined at top and checkpoints WAL + closes connection.
+
+    # ========== Git Agent Mode Methods (IDEA #5 Phase 1) ==========
+
+    def add_git_repo(self, name: str, owner: str, source: str = "github",
+                     api_url: str = "https://api.github.com",
+                     html_url: str = "",
+                     default_branch: str = "main") -> int:
+        """Register a git repository for agent monitoring.
+
+        Args:
+            name: Repo name (e.g. "aircp").
+            owner: Repo owner (e.g. "hdds-team").
+            source: Provider type ("github" or "gitea").
+            api_url: API base URL.
+            html_url: Web URL for the repo.
+            default_branch: Default branch name.
+
+        Returns:
+            Repo ID, or -1 on error.
+        """
+        try:
+            now = _sqlite_now()
+            conn = self._get_conn()
+            c = conn.cursor()
+            c.execute("""
+                INSERT OR IGNORE INTO git_repos
+                (name, owner, source, api_url, html_url, default_branch, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (name, owner, source, api_url, html_url, default_branch, now, now))
+            repo_id = c.lastrowid
+            conn.commit()
+            if repo_id:
+                logger.info(f"[git] Registered repo {owner}/{name} (id={repo_id}, source={source})")
+            return repo_id or -1
+        except Exception as e:
+            logger.error(f"Failed to add git repo: {e}")
+            return -1
+
+    def get_git_repo(self, name: str = None, repo_id: int = None) -> Optional[Dict[str, Any]]:
+        """Get a git repo by name or ID."""
+        try:
+            conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            if repo_id is not None:
+                c.execute("SELECT * FROM git_repos WHERE id = ?", (repo_id,))
+            elif name is not None:
+                c.execute("SELECT * FROM git_repos WHERE name = ?", (name,))
+            else:
+                return None
+            row = c.fetchone()
+            return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"Failed to get git repo: {e}")
+            return None
+
+    def get_all_git_repos(self, enabled_only: bool = True) -> List[Dict[str, Any]]:
+        """List all registered git repos."""
+        try:
+            conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            if enabled_only:
+                c.execute("SELECT * FROM git_repos WHERE enabled = 1 ORDER BY name")
+            else:
+                c.execute("SELECT * FROM git_repos ORDER BY name")
+            return [dict(row) for row in c.fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to list git repos: {e}")
+            return []
+
+    def log_git_event(self, event_type: str, actor_id: str = "",
+                      repo_id: int = None, issue_number: int = None,
+                      details: Dict = None,
+                      project_id: str = "default") -> int:
+        """Log a git agent event to the audit trail.
+
+        Args:
+            event_type: Event type (e.g. "list_issues", "assign", "comment",
+                        "approve", "reject", "create_pr", "close_issue").
+            actor_id: Agent or user who triggered the event.
+            repo_id: Associated repo ID (optional).
+            issue_number: Associated issue number (optional).
+            details: JSON-serializable details dict.
+            project_id: Project scope.
+
+        Returns:
+            Event ID, or -1 on error.
+        """
+        try:
+            now = _sqlite_now()
+            conn = self._get_conn()
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO git_events
+                (repo_id, event_type, actor_id, issue_number, details, project_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (repo_id, event_type, actor_id, issue_number,
+                  json.dumps(details) if details else None,
+                  project_id, now))
+            event_id = c.lastrowid
+            conn.commit()
+            logger.debug(f"[git] Event logged: {event_type} by {actor_id} (id={event_id})")
+            return event_id
+        except Exception as e:
+            logger.error(f"Failed to log git event: {e}")
+            return -1
+
+    def get_git_events(self, repo_id: int = None, event_type: str = None,
+                       actor_id: str = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """Query git events with optional filters."""
+        try:
+            conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            where = []
+            params = []
+            if repo_id is not None:
+                where.append("repo_id = ?")
+                params.append(repo_id)
+            if event_type:
+                where.append("event_type = ?")
+                params.append(event_type)
+            if actor_id:
+                where.append("actor_id = ?")
+                params.append(actor_id)
+            clause = f"WHERE {' AND '.join(where)}" if where else ""
+            params.append(limit)
+            c.execute(f"""
+                SELECT * FROM git_events {clause}
+                ORDER BY created_at DESC LIMIT ?
+            """, params)
+            rows = c.fetchall()
+            result = []
+            for row in rows:
+                d = dict(row)
+                if d.get("details"):
+                    try:
+                        d["details"] = json.loads(d["details"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                result.append(d)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get git events: {e}")
+            return []
+
+    def cache_issues(self, repo_id: int, issues: List[Dict[str, Any]]) -> int:
+        """Bulk upsert cached issues from GitHub API.
+
+        Args:
+            repo_id: Repo ID from git_repos table.
+            issues: List of issue dicts with keys matching git_issue_cache columns.
+
+        Returns:
+            Number of issues cached.
+        """
+        try:
+            now = _sqlite_now()
+            conn = self._get_conn()
+            c = conn.cursor()
+            count = 0
+            for issue in issues:
+                c.execute("""
+                    INSERT INTO git_issue_cache
+                    (repo_id, issue_number, title, body, state, labels, assignees,
+                     author_login, comments_count, html_url, created_at, updated_at, cached_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(repo_id, issue_number) DO UPDATE SET
+                        title = excluded.title,
+                        body = excluded.body,
+                        state = excluded.state,
+                        labels = excluded.labels,
+                        assignees = excluded.assignees,
+                        comments_count = excluded.comments_count,
+                        html_url = excluded.html_url,
+                        updated_at = excluded.updated_at,
+                        cached_at = excluded.cached_at
+                """, (
+                    repo_id,
+                    issue.get("number", 0),
+                    issue.get("title", ""),
+                    issue.get("body", ""),
+                    issue.get("state", "open"),
+                    json.dumps(issue.get("labels", [])),
+                    json.dumps(issue.get("assignees", [])),
+                    issue.get("author_login", ""),
+                    issue.get("comments_count", 0),
+                    issue.get("html_url", ""),
+                    issue.get("created_at", now),
+                    issue.get("updated_at", now),
+                    now,
+                ))
+                count += 1
+            conn.commit()
+            logger.debug(f"[git] Cached {count} issues for repo_id={repo_id}")
+            return count
+        except Exception as e:
+            logger.error(f"Failed to cache issues: {e}")
+            return 0
+
+    def get_cached_issues(self, repo_id: int, state: str = "open") -> List[Dict[str, Any]]:
+        """Get cached issues for a repo, optionally filtered by state."""
+        try:
+            conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            if state == "all":
+                c.execute("""
+                    SELECT * FROM git_issue_cache
+                    WHERE repo_id = ?
+                    ORDER BY updated_at DESC
+                """, (repo_id,))
+            else:
+                c.execute("""
+                    SELECT * FROM git_issue_cache
+                    WHERE repo_id = ? AND state = ?
+                    ORDER BY updated_at DESC
+                """, (repo_id, state))
+            rows = c.fetchall()
+            result = []
+            for row in rows:
+                d = dict(row)
+                for field in ("labels", "assignees"):
+                    if d.get(field):
+                        try:
+                            d[field] = json.loads(d[field])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                result.append(d)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get cached issues: {e}")
+            return []
+
+    def get_cached_issue(self, repo_id: int, issue_number: int) -> Optional[Dict[str, Any]]:
+        """Get a single cached issue."""
+        try:
+            conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("""
+                SELECT * FROM git_issue_cache
+                WHERE repo_id = ? AND issue_number = ?
+            """, (repo_id, issue_number))
+            row = c.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            for field in ("labels", "assignees"):
+                if d.get(field):
+                    try:
+                        d[field] = json.loads(d[field])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            return d
+        except Exception as e:
+            logger.error(f"Failed to get cached issue: {e}")
+            return None
+
+    def queue_git_action(self, repo_id: int, action_type: str, actor_id: str,
+                         params: Dict = None, issue_number: int = None,
+                         preview: str = "") -> int:
+        """Queue a write action for dashboard approval.
+
+        Args:
+            repo_id: Target repo ID.
+            action_type: Action type ("comment", "add_label", "create_pr").
+            actor_id: Agent requesting the action.
+            params: Action parameters (JSON-serializable).
+            issue_number: Associated issue number.
+            preview: Human-readable preview of what the action will do.
+
+        Returns:
+            Action ID, or -1 on error.
+        """
+        try:
+            now = _sqlite_now()
+            conn = self._get_conn()
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO git_actions_queue
+                (repo_id, issue_number, action_type, actor_id, params, preview, status, queued_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+            """, (repo_id, issue_number, action_type, actor_id,
+                  json.dumps(params) if params else "{}",
+                  preview, now))
+            action_id = c.lastrowid
+            conn.commit()
+            logger.info(
+                f"[git] Queued action {action_type} by {actor_id} "
+                f"(id={action_id}, issue=#{issue_number})"
+            )
+            return action_id
+        except Exception as e:
+            logger.error(f"Failed to queue git action: {e}")
+            return -1
+
+    def get_pending_git_actions(self, repo_id: int = None) -> List[Dict[str, Any]]:
+        """Get all pending (unapproved) actions in the queue."""
+        try:
+            conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            if repo_id is not None:
+                c.execute("""
+                    SELECT * FROM git_actions_queue
+                    WHERE status = 'pending' AND repo_id = ?
+                    ORDER BY queued_at ASC
+                """, (repo_id,))
+            else:
+                c.execute("""
+                    SELECT * FROM git_actions_queue
+                    WHERE status = 'pending'
+                    ORDER BY queued_at ASC
+                """)
+            rows = c.fetchall()
+            result = []
+            for row in rows:
+                d = dict(row)
+                if d.get("params"):
+                    try:
+                        d["params"] = json.loads(d["params"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                result.append(d)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get pending git actions: {e}")
+            return []
+
+    def approve_git_action(self, action_id: int, approved_by: str) -> bool:
+        """Approve a pending action (marks it ready for execution)."""
+        try:
+            now = _sqlite_now()
+            conn = self._get_conn()
+            c = conn.cursor()
+            c.execute("""
+                UPDATE git_actions_queue
+                SET status = 'approved', approved_by = ?, decided_at = ?
+                WHERE id = ? AND status = 'pending'
+            """, (approved_by, now, action_id))
+            updated = c.rowcount > 0
+            conn.commit()
+            if updated:
+                logger.info(f"[git] Action {action_id} approved by {approved_by}")
+            return updated
+        except Exception as e:
+            logger.error(f"Failed to approve git action: {e}")
+            return False
+
+    def reject_git_action(self, action_id: int, rejected_by: str) -> bool:
+        """Reject a pending action."""
+        try:
+            now = _sqlite_now()
+            conn = self._get_conn()
+            c = conn.cursor()
+            c.execute("""
+                UPDATE git_actions_queue
+                SET status = 'rejected', rejected_by = ?, decided_at = ?
+                WHERE id = ? AND status = 'pending'
+            """, (rejected_by, now, action_id))
+            updated = c.rowcount > 0
+            conn.commit()
+            if updated:
+                logger.info(f"[git] Action {action_id} rejected by {rejected_by}")
+            return updated
+        except Exception as e:
+            logger.error(f"Failed to reject git action: {e}")
+            return False
+
+    def mark_git_action_executed(self, action_id: int, result: str = "") -> bool:
+        """Mark an approved action as executed."""
+        try:
+            now = _sqlite_now()
+            conn = self._get_conn()
+            c = conn.cursor()
+            c.execute("""
+                UPDATE git_actions_queue
+                SET status = 'executed', result = ?, executed_at = ?
+                WHERE id = ? AND status = 'approved'
+            """, (result, now, action_id))
+            updated = c.rowcount > 0
+            conn.commit()
+            return updated
+        except Exception as e:
+            logger.error(f"Failed to mark git action executed: {e}")
+            return False
+
+    def get_git_action(self, action_id: int) -> Optional[Dict[str, Any]]:
+        """Get a single action from the queue by ID."""
+        try:
+            conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("SELECT * FROM git_actions_queue WHERE id = ?", (action_id,))
+            row = c.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            if d.get("params"):
+                try:
+                    d["params"] = json.loads(d["params"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            return d
+        except Exception as e:
+            logger.error(f"Failed to get git action: {e}")
+            return None
+
+    def assign_agent_to_issue(self, repo_id: int, issue_number: int,
+                              agent_id: str, role: str = "investigate",
+                              task_id: int = None,
+                              assigned_by: str = "@naskel") -> int:
+        """Assign an agent to a GitHub issue.
+
+        Args:
+            repo_id: Repo ID.
+            issue_number: Issue number.
+            agent_id: Agent to assign.
+            role: Agent role ("triage", "investigate", "code", "review").
+            task_id: Linked AIRCP task ID (if auto-created).
+            assigned_by: Who assigned (usually @naskel via dashboard).
+
+        Returns:
+            Assignment ID, or -1 on error.
+        """
+        try:
+            now = _sqlite_now()
+            conn = self._get_conn()
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO git_issue_assignments
+                (repo_id, issue_number, agent_id, role, task_id, assigned_by, assigned_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repo_id, issue_number, agent_id) DO UPDATE SET
+                    role = excluded.role,
+                    task_id = excluded.task_id,
+                    assigned_at = excluded.assigned_at
+            """, (repo_id, issue_number, agent_id, role, task_id, assigned_by, now))
+            assignment_id = c.lastrowid
+            conn.commit()
+            logger.info(
+                f"[git] Assigned {agent_id} ({role}) to issue #{issue_number} "
+                f"(repo_id={repo_id})"
+            )
+            return assignment_id
+        except Exception as e:
+            logger.error(f"Failed to assign agent to issue: {e}")
+            return -1
+
+    def get_issue_assignments(self, repo_id: int,
+                              issue_number: int) -> List[Dict[str, Any]]:
+        """Get all agent assignments for an issue."""
+        try:
+            conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("""
+                SELECT * FROM git_issue_assignments
+                WHERE repo_id = ? AND issue_number = ?
+                ORDER BY assigned_at ASC
+            """, (repo_id, issue_number))
+            return [dict(row) for row in c.fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to get issue assignments: {e}")
+            return []
+
+    def is_git_action_approved(self, action_type: str, params: Dict) -> bool:
+        """Check if a specific action has been approved in the queue.
+
+        Used by DryRunGate's approval_checker callback.
+        Matches on action_type and params JSON equality.
+        """
+        try:
+            conn = self._get_conn()
+            c = conn.cursor()
+            c.execute("""
+                SELECT id FROM git_actions_queue
+                WHERE action_type = ? AND params = ? AND status = 'approved'
+                ORDER BY decided_at DESC LIMIT 1
+            """, (action_type, json.dumps(params)))
+            return c.fetchone() is not None
+        except Exception as e:
+            logger.error(f"Failed to check action approval: {e}")
+            return False
 
 
 if __name__ == "__main__":

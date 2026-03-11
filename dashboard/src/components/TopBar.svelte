@@ -23,6 +23,7 @@
   let projectFormOpen = $state(false);
   let projectId = $state('');
   let projectName = $state('');
+  let projectError = $state('');
 
   let ideaFormOpen = $state(false);
   let ideaText = $state('');
@@ -83,7 +84,11 @@
 
   async function createProject() {
     const id = projectId.trim().toLowerCase().replace(/\s+/g, '-');
-    if (!id) return;
+    if (!id) {
+      projectError = 'Project ID is required';
+      return;
+    }
+    projectError = '';
     try {
       const res = await fetch('/api/projects', {
         method: 'POST',
@@ -99,8 +104,16 @@
         tasksStore.init();
         reviewsStore.init();
         messagesStore.refetchHistory();
+      } else {
+        try {
+          const err = await res.json();
+          projectError = err.error || `Error ${res.status}`;
+        } catch {
+          projectError = `Error ${res.status}`;
+        }
       }
     } catch (e) {
+      projectError = 'Network error';
       console.warn('[topbar] Failed to create project:', e);
     }
   }
@@ -109,6 +122,7 @@
     projectFormOpen = false;
     projectId = '';
     projectName = '';
+    projectError = '';
   }
 
   function onProjectChange(e) {
@@ -159,6 +173,7 @@
         />
         <button class="success" onclick={createProject}>OK</button>
         <button onclick={cancelProject}>✕</button>
+        {#if projectError}<span class="form-error">{projectError}</span>{/if}
       </div>
     {:else}
       <select class="project-select" onchange={onProjectChange} value={projectStore.activeProject || ''}>
@@ -167,7 +182,7 @@
           <option value={p.id}>{p.name || p.id}</option>
         {/each}
       </select>
-      <button class="action-btn project-add-btn" onclick={() => projectFormOpen = true}>+</button>
+      <button class="action-btn project-add-btn" onclick={() => { projectFormOpen = true; projectError = ''; }}>+</button>
     {/if}
 
     <span class="conn-dot" style="color: {stateColors[connectionStore.state]}">●</span>
@@ -389,6 +404,13 @@
   .notif-btn { color: var(--text-muted); }
   .notif-btn.notif-on { color: var(--success); border-color: var(--success); }
   .notif-btn:hover { color: var(--text-primary); }
+
+  .form-error {
+    font-size: 11px;
+    color: var(--danger);
+    padding: 0 4px;
+    white-space: nowrap;
+  }
 
   .right { display: flex; align-items: center; gap: 6px; }
   .stop-btn { background: transparent; }

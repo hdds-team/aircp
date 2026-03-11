@@ -14,10 +14,12 @@ def collect_routes():
     """
     from . import system, projects, tasks, reviews, brainstorm
     from . import autonomy, messaging, workflow, extras, uploads
+    from . import github
 
     modules = [
         system, projects, tasks, reviews, brainstorm,
         autonomy, messaging, workflow, extras, uploads,
+        github,
     ]
 
     get_routes = {}

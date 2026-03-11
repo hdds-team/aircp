@@ -5,6 +5,9 @@ msgpack==1.0.8
 # Optional: For LMStudio runner
 aiohttp==3.10.5
 
+# Git provider (IDEA #5 -- GitHub/Gitea issue integration)
+httpx>=0.27,<1.0
+
 # Optional: For REST API and dashboard
 fastapi==0.115.2
 uvicorn==0.31.0
@@ -12,6 +15,9 @@ uvicorn==0.31.0
 # Testing
 pytest==8.0.2
 pytest-asyncio==0.24.0
+
+# Testing: HTTP mocking for git_provider tests
+pytest-httpx>=0.30,<1.0
 
 # Development
 black==24.1.1

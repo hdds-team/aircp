@@ -8,6 +8,7 @@
   import { projectStore } from './stores/project.svelte.js';
   import { tasksStore } from './stores/tasks.svelte.js';
   import { reviewsStore } from './stores/reviews.svelte.js';
+  import { issuesStore } from './stores/issues.svelte.js';
   import { modeStore } from './stores/mode.svelte.js';
   import { workflowStore } from './stores/workflow.svelte.js';
   import Login from './components/Login.svelte';
@@ -30,6 +31,7 @@
       agentsStore.init(),
       tasksStore.init(),
       reviewsStore.init(),
+      issuesStore.init(),
       modeStore.init(),
     ]);
     workflowStore.init();
@@ -49,6 +51,7 @@
     agentsStore.cleanup();
     tasksStore.cleanup();
     reviewsStore.cleanup();
+    issuesStore.cleanup();
     modeStore.cleanup();
     workflowStore.cleanup();
     connectionStore.disconnect();

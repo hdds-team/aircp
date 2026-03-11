@@ -2,6 +2,7 @@
   import { agentsStore } from '../stores/agents.svelte.js';
   import { tasksStore } from '../stores/tasks.svelte.js';
   import { reviewsStore } from '../stores/reviews.svelte.js';
+  import { issuesStore } from '../stores/issues.svelte.js';
   import { workflowStore } from '../stores/workflow.svelte.js';
   import { modeStore } from '../stores/mode.svelte.js';
   import { AGENTS } from '../lib/topics.js';
@@ -13,6 +14,12 @@
   let completedOpen = $state(false);
   let closedReviewsOpen = $state(false);
 
+  // Issues panel state
+  let assignOpen = $state(null);
+  let assignAgent = $state('');
+  let assignRole = $state('triage');
+  let assignBusy = $state(false);
+
   // Request Review form state
   let reqRevOpen = $state(false);
   let reqRevFile = $state('');
@@ -22,6 +29,7 @@
   let filePickerOpen = $state(false);
 
   const reviewerOptions = Object.keys(AGENTS).filter(id => id !== settingsStore.operatorId);
+  const agentOptions = Object.keys(AGENTS).filter(id => id !== '@naskel');
 
   function toggleReviewer(id) {
     if (reqRevReviewers.includes(id)) {
@@ -90,10 +98,28 @@
     }
   }
 
+  async function submitAssign(issueNumber) {
+    if (!assignAgent || assignBusy) return;
+    assignBusy = true;
+    try {
+      const ok = await issuesStore.assignAgent(issueNumber, assignAgent, assignRole);
+      if (ok) {
+        assignOpen = null;
+        assignAgent = '';
+        assignRole = 'triage';
+      }
+    } catch (e) {
+      console.warn('[issues] Assign failed:', e);
+    } finally {
+      assignBusy = false;
+    }
+  }
+
   const tabs = [
     { id: 'agents', label: 'Agents' },
     { id: 'tasks', label: 'Tasks' },
     { id: 'reviews', label: 'Rev' },
+    { id: 'issues', label: 'Issues' },
     { id: 'workflow', label: 'Workflow' },
     { id: 'controls', label: 'Ctrl' },
   ];
@@ -171,6 +197,9 @@
         {#if tab.id === 'reviews' && reviewsStore.activeReviews.length > 0}
           <span class="tab-badge">{reviewsStore.activeReviews.length}</span>
         {/if}
+        {#if tab.id === 'issues' && issuesStore.pendingCount > 0}
+          <span class="tab-badge">{issuesStore.pendingCount}</span>
+        {/if}
       </button>
     {/each}
   </div>
@@ -244,7 +273,7 @@
 
         {#if tasksStore.completedTasks.length > 0}
           <button class="completed-toggle" onclick={() => completedOpen = !completedOpen}>
-            {completedOpen ? '▾' : '▸'} Completed ({tasksStore.completedTasks.length})
+            {completedOpen ? '\u25BE' : '\u25B8'} Completed ({tasksStore.completedTasks.length})
           </button>
           {#if completedOpen}
             {#each tasksStore.completedTasks as task}
@@ -333,7 +362,7 @@
             <div class="review-file" title={review.file}>{review.file.split('/').slice(-2).join('/')}</div>
             <div class="review-meta">
               <span class="review-author" style="color: {AGENTS[review.requestedBy]?.color || 'var(--text-muted)'}">{review.requestedBy}</span>
-              <span class="review-arrow">→</span>
+              <span class="review-arrow">&rarr;</span>
               {#each review.reviewers as reviewer}
                 <span class="review-reviewer" style="color: {AGENTS[reviewer]?.color || 'var(--text-muted)'}">{reviewer}</span>
               {/each}
@@ -377,7 +406,7 @@
 
         {#if reviewsStore.closedReviews.length > 0}
           <button class="completed-toggle" onclick={() => closedReviewsOpen = !closedReviewsOpen}>
-            {closedReviewsOpen ? '▾' : '▸'} Closed ({reviewsStore.closedReviews.length})
+            {closedReviewsOpen ? '\u25BE' : '\u25B8'} Closed ({reviewsStore.closedReviews.length})
           </button>
           {#if closedReviewsOpen}
             {#each reviewsStore.closedReviews as review}
@@ -390,13 +419,131 @@
                 <div class="review-meta">
                   <span style="color: var(--text-muted)">{review.requestedBy}</span>
                   {#if review.consensus === 'timeout'}
-                    <button class="retry-btn" onclick={() => retryReview(review)} title="Retry review">↻</button>
+                    <button class="retry-btn" onclick={() => retryReview(review)} title="Retry review">&circlearrowright;</button>
                   {/if}
                   <span class="review-time">{timeAgoFromISO(review.closedAt || review.createdAt)}</span>
                 </div>
               </div>
             {/each}
           {/if}
+        {/if}
+      </div>
+
+    <!-- ISSUES -->
+    {:else if activeTab === 'issues'}
+      <div class="panel">
+        <div class="issues-toolbar">
+          <button class="issues-refresh" onclick={() => issuesStore.refreshFromGitHub()} disabled={issuesStore.loading}>
+            {issuesStore.loading ? '...' : '↻ Refresh'}
+          </button>
+          {#if issuesStore.error}
+            <span class="issues-error" title={issuesStore.error}>⚠</span>
+          {/if}
+        </div>
+
+        {#if issuesStore.issues.length === 0 && !issuesStore.loading}
+          <div class="empty-tab">No issues &mdash; click Refresh to fetch from GitHub</div>
+        {/if}
+
+        <!-- Unassigned -->
+        {#if issuesStore.unassigned.length > 0}
+          <div class="issues-section-title">Unassigned ({issuesStore.unassigned.length})</div>
+          {#each issuesStore.unassigned as issue}
+            <div class="issue-card">
+              <div class="issue-header">
+                <span class="issue-number">#{issue.number}</span>
+                <span class="issue-title">{issue.title}</span>
+                <a class="issue-link" href={issue.url} target="_blank" rel="noopener">&nearr;</a>
+              </div>
+              {#if issue.labels.length}
+                <div class="issue-labels">
+                  {#each issue.labels as label}
+                    <span class="label-chip">{label}</span>
+                  {/each}
+                </div>
+              {/if}
+              {#if assignOpen === issue.number}
+                <div class="assign-form">
+                  <select class="assign-select" bind:value={assignAgent}>
+                    <option value="">Agent...</option>
+                    {#each agentOptions as id}
+                      <option value={id}>{id}</option>
+                    {/each}
+                  </select>
+                  <select class="assign-select" bind:value={assignRole}>
+                    <option value="triage">triage</option>
+                    <option value="investigate">investigate</option>
+                    <option value="code">code</option>
+                    <option value="review">review</option>
+                  </select>
+                  <button class="ia-btn ia-confirm" disabled={!assignAgent || assignBusy} onclick={() => submitAssign(issue.number)}>
+                    {assignBusy ? '...' : 'Assign'}
+                  </button>
+                  <button class="ia-btn ia-cancel" onclick={() => assignOpen = null}>x</button>
+                </div>
+              {:else}
+                <button class="assign-btn" onclick={() => { assignOpen = issue.number; assignAgent = ''; assignRole = 'triage'; }}>
+                  + Assign agent
+                </button>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+
+        <!-- In Progress -->
+        {#if issuesStore.inProgress.length > 0}
+          <div class="issues-section-title">In Progress ({issuesStore.inProgress.length})</div>
+          {#each issuesStore.inProgress as issue}
+            <div class="issue-card">
+              <div class="issue-header">
+                <span class="issue-number">#{issue.number}</span>
+                <span class="issue-title">{issue.title}</span>
+                <a class="issue-link" href={issue.url} target="_blank" rel="noopener">&nearr;</a>
+              </div>
+              {#if issue.labels.length}
+                <div class="issue-labels">
+                  {#each issue.labels as label}
+                    <span class="label-chip">{label}</span>
+                  {/each}
+                </div>
+              {/if}
+              <div class="issue-agents">
+                {#each issue.agents as a}
+                  <span class="agent-role" style="color: {AGENTS[a.agent]?.color || 'var(--text-secondary)'}">
+                    {a.agent} <span class="role-badge">{a.role}</span>
+                  </span>
+                {/each}
+                {#if issue.agents.some(a => a.taskId)}
+                  <span class="linked-task">&rarr; #{issue.agents.find(a => a.taskId)?.taskId}</span>
+                {/if}
+              </div>
+              <button class="assign-btn" onclick={() => { assignOpen = issue.number; assignAgent = ''; assignRole = 'code'; }}>
+                + Assign another
+              </button>
+            </div>
+          {/each}
+        {/if}
+
+        <!-- Approval Queue -->
+        {#if issuesStore.queue.length > 0}
+          <div class="issues-section-title">Approval Queue ({issuesStore.queue.length})</div>
+          {#each issuesStore.queue as action}
+            <div class="queue-card">
+              <div class="queue-header">
+                <span class="queue-issue">#{action.issue_number}</span>
+                <span class="queue-agent" style="color: {AGENTS[action.actor_id]?.color || 'var(--text-secondary)'}">{action.actor_id}</span>
+                <span class="queue-action-type">{action.action_type}</span>
+                <span class="queue-time">{timeAgoFromISO(action.created_at)}</span>
+              </div>
+              {#if action.preview}
+                <div class="queue-preview">{action.preview}</div>
+              {/if}
+              <div class="queue-actions">
+                <button class="qa-btn qa-approve" onclick={() => issuesStore.approveAction(action.id)}>&check; Approve</button>
+                <button class="qa-btn qa-reject" onclick={() => issuesStore.rejectAction(action.id)}>&cross; Reject</button>
+              </div>
+            </div>
+          {/each}
         {/if}
       </div>
 
@@ -503,7 +650,7 @@
 
         <div class="ctrl-section">
           <div class="ctrl-title">Emergency</div>
-          <button class="danger" onclick={() => modeStore.stop()}>■ STOP ALL</button>
+          <button class="danger" onclick={() => modeStore.stop()}>&#9632; STOP ALL</button>
         </div>
       </div>
     {/if}
@@ -843,6 +990,113 @@
     padding: 3px 0;
   }
   .req-rev-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Issue cards */
+  .issue-card {
+    padding: 6px 8px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+  }
+  .issue-header { display: flex; align-items: center; gap: 4px; }
+  .issue-number { font-weight: 600; font-size: 12px; color: var(--info); flex-shrink: 0; }
+  .issue-title {
+    font-size: 12px; color: var(--text-secondary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1;
+  }
+  .issue-link {
+    font-size: 10px; color: var(--text-muted);
+    text-decoration: none; flex-shrink: 0;
+  }
+  .issue-link:hover { color: var(--accent); }
+  .issue-labels { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+  .label-chip {
+    font-size: 9px; padding: 1px 5px;
+    background: var(--bg-active); border-radius: 8px;
+    color: var(--text-secondary);
+  }
+  .issue-agents { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; font-size: 11px; }
+  .agent-role { font-weight: 600; }
+  .role-badge {
+    font-size: 9px; color: var(--text-muted);
+    font-weight: 400; text-transform: uppercase;
+  }
+  .linked-task { color: var(--info); font-size: 10px; }
+
+  /* Assign form */
+  .assign-btn {
+    width: 100%; font-size: 10px; padding: 3px 0;
+    border: 1px dashed var(--border); background: transparent;
+    color: var(--text-muted); border-radius: 3px; cursor: pointer;
+    margin-top: 5px;
+  }
+  .assign-btn:hover { border-color: var(--info); color: var(--info); }
+  .assign-form { display: flex; gap: 4px; align-items: center; margin-top: 5px; }
+  .assign-select {
+    font-size: 10px; padding: 2px 4px;
+    background: var(--bg-primary); border: 1px solid var(--border);
+    color: var(--text-primary); border-radius: 3px; font-family: inherit;
+  }
+  .ia-btn {
+    font-size: 10px; padding: 2px 6px;
+    border-radius: 3px; border: 1px solid var(--border);
+    background: transparent; cursor: pointer;
+  }
+  .ia-confirm { color: var(--success); border-color: var(--success); }
+  .ia-confirm:hover { background: var(--success); color: var(--bg-primary); }
+  .ia-confirm:disabled { opacity: 0.4; cursor: not-allowed; }
+  .ia-cancel { color: var(--text-muted); border: none; }
+
+  /* Issues toolbar */
+  .issues-toolbar {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .issues-refresh {
+    font-size: 10px; padding: 3px 8px;
+    border: 1px solid var(--border); background: transparent;
+    color: var(--text-secondary); border-radius: 3px; cursor: pointer;
+  }
+  .issues-refresh:hover { border-color: var(--info); color: var(--info); }
+  .issues-refresh:disabled { opacity: 0.4; cursor: not-allowed; }
+  .issues-error { color: var(--warning); font-size: 14px; cursor: help; }
+  .issues-section-title {
+    font-size: 10px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; padding: 4px 0 2px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  /* Queue cards */
+  .queue-card {
+    padding: 6px 8px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    border: 1px solid var(--warning);
+  }
+  .queue-header { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+  .queue-issue { font-weight: 600; color: var(--info); }
+  .queue-agent { font-weight: 600; }
+  .queue-action-type {
+    font-size: 9px; text-transform: uppercase;
+    color: var(--text-muted);
+    background: var(--bg-active); padding: 1px 5px; border-radius: 3px;
+  }
+  .queue-time { margin-left: auto; font-size: 10px; color: var(--text-muted); }
+  .queue-preview {
+    font-size: 11px; color: var(--text-secondary);
+    margin-top: 4px; font-style: italic;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .queue-actions { display: flex; gap: 4px; margin-top: 5px; }
+  .qa-btn {
+    flex: 1; font-size: 10px; padding: 3px 0;
+    border-radius: 3px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent;
+  }
+  .qa-approve { color: var(--success); border-color: var(--success); }
+  .qa-approve:hover { background: var(--success); color: var(--bg-primary); }
+  .qa-reject { color: var(--danger); border-color: var(--danger); }
+  .qa-reject:hover { background: var(--danger); color: var(--bg-primary); }
 
   /* Workflow */
   .wf-feature { font-weight: 600; font-size: 13px; padding: 4px 0; }

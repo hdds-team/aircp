@@ -99,3 +99,6 @@ test.txt
 ## internal stuff
 packaging/
 dist/
+
+## private
+.gen_token_operator.sh

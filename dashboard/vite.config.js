@@ -8,6 +8,10 @@ export default defineConfig({
     host: '0.0.0.0',   // Listen on all interfaces (IPv4 + IPv6)
     strictPort: true,   // Fail instead of trying random ports
     proxy: {
+      // GitHub API routes — keep /api/github prefix (daemon expects it)
+      '/api/github': {
+        target: 'http://localhost:5555',
+      },
       // Legacy fallback to daemon HTTP during transition
       '/api': {
         target: 'http://localhost:5555',
