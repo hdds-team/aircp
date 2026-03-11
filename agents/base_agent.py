@@ -396,9 +396,35 @@ class PersistentAgent(TaskWorkerMixin, ABC):
                 "--- END ECO MODE ---"
             )
 
+        # Active file locks warning (Brainstorm #7 — auto-lock)
+        lock_hint = ""
+        try:
+            import urllib.request, json as _json
+            req = urllib.request.Request("http://localhost:5555/locks")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                lock_data = _json.loads(resp.read())
+                locks = lock_data.get("locks", [])
+                if locks:
+                    lock_lines = []
+                    for lk in locks:
+                        holder = lk.get("holder", "?")
+                        path = lk.get("path", "?")
+                        if holder != self.agent_id:
+                            lock_lines.append(f"  - `{path}` locked by {holder}")
+                    if lock_lines:
+                        lock_hint = (
+                            "\n\n--- ACTIVE FILE LOCKS ---\n"
+                            "These files are locked by other agents. "
+                            "Do NOT modify them without coordination:\n"
+                            + "\n".join(lock_lines)
+                            + "\n--- END LOCKS ---"
+                        )
+        except Exception:
+            pass  # daemon unreachable, skip
+
         context.append({
             "role": "system",
-            "content": f"{date_line}\n\n{self.soul}{room_hint}"
+            "content": f"{date_line}\n\n{self.soul}{room_hint}{lock_hint}"
         })
 
         # Load recent memory for this room
