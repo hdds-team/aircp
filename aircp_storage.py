@@ -824,12 +824,14 @@ class AIRCPStorage:
                 logger.info(f"Task {task_id} auto-switched to in_progress")
             if current_step is not None:
                 c.execute("""
-                    UPDATE agent_tasks SET last_activity = ?, current_step = ? WHERE id = ?
+                    UPDATE agent_tasks SET last_activity = ?, current_step = ?,
+                    ping_count = 0, last_pinged_at = NULL WHERE id = ?
                 """, (now, current_step, task_id))
                 logger.debug(f"Task {task_id} activity updated with step {current_step}")
             else:
                 c.execute("""
-                    UPDATE agent_tasks SET last_activity = ? WHERE id = ?
+                    UPDATE agent_tasks SET last_activity = ?,
+                    ping_count = 0, last_pinged_at = NULL WHERE id = ?
                 """, (now, task_id))
             updated = c.rowcount > 0
             conn.commit()
@@ -1005,7 +1007,8 @@ class AIRCPStorage:
             return []
 
     def mark_stale_tasks_as_stale(self, max_pings: int = 3) -> int:
-        """Mark tasks that have been pinged max_pings times without response as 'stale'"""
+        """Mark tasks that have been pinged max_pings times without response as 'stale'.
+        Safety: also checks last_activity is old enough to avoid race with ping_count reset."""
         try:
             now = _sqlite_now()
             conn = self._get_conn()
@@ -1014,6 +1017,7 @@ class AIRCPStorage:
                 UPDATE agent_tasks 
                 SET status = 'stale', completed_at = ?
                 WHERE status = 'in_progress'
+                AND datetime(last_activity) < datetime('now', '-60 seconds')
                 AND ping_count >= ?
             """, (now, max_pings))
             updated = c.rowcount

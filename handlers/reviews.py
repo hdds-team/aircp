@@ -1,12 +1,17 @@
 """Review routes: /review/*"""
 
+import logging
+
 from handlers._base import normalize_timestamps
+from handlers.tasks import _auto_lock_files, _auto_release_locks
 from aircp_daemon import (
     storage, transport, workflow_scheduler, bridge,
     _bot_send, ensure_room, _resolve_project, telegram_notify,
     _run_git_hooks, review_reminder_state,
     REVIEW_TIMEOUT_SECONDS,
 )
+
+logger = logging.getLogger("handlers.reviews")
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +103,9 @@ def post_review_request(handler, body):
                 ensure_room("#general")
                 _bot_send("#general", msg, from_id="@review")
 
+            # Auto-lock the reviewed file (Brainstorm #7)
+            _auto_lock_files([file_path], requested_by, request_id)
+
             handler.send_json({
                 "status": "created",
                 "request_id": request_id,
@@ -150,6 +158,9 @@ def post_review_approve(handler, body):
 
             if approvals >= min_approvals:
                 storage.close_review_request(request_id, "approved", "completed")
+                # Auto-release lock on reviewed file (Brainstorm #7)
+                requested_by = review.get("requested_by", "")
+                _auto_release_locks(requested_by, request_id)
                 msg = f"\U0001f389 **REVIEW #{request_id}** approved! ({approvals}/{min_approvals} approvals)"
                 if transport:
                     _bot_send("#general", msg, from_id="@review")

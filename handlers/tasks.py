@@ -1,10 +1,77 @@
 """Task routes: /tasks, /task/*, /progress/{agent}"""
 
+import asyncio
+import logging
+import re
+
 from handlers._base import normalize_timestamps
 from aircp_daemon import (
-    storage, transport, workflow_scheduler, bridge,
+    storage, transport, workflow_scheduler, bridge, autonomy,
     _bot_send, _resolve_project, _run_git_hooks, _auto_create_workflow_review,
 )
+
+logger = logging.getLogger("handlers.tasks")
+
+
+# ---------------------------------------------------------------------------
+# Auto-lock helpers (Brainstorm #7)
+# ---------------------------------------------------------------------------
+
+# Matches file paths like watchdogs.py, agents/base_agent.py, src/foo/bar.ts
+_FILE_PATH_RE = re.compile(
+    r'(?:^|\s|[`\'"(])'           # preceded by whitespace, quote, backtick, paren
+    r'([\w./\-]+\.\w{1,10})'      # filename with extension
+    r'(?:[\s`\'")\],;:]|$)',       # followed by whitespace, quote, backtick, etc.
+)
+
+def _extract_file_paths(text: str) -> list[str]:
+    """Extract plausible file paths from a task description."""
+    matches = _FILE_PATH_RE.findall(text)
+    # Filter out common false positives (URLs, versions, etc.)
+    return [m for m in matches if '/' in m or m.endswith('.py') or m.endswith('.svelte')
+            or m.endswith('.ts') or m.endswith('.js') or m.endswith('.toml')
+            or m.endswith('.md') or m.endswith('.rs')]
+
+
+def _auto_lock_files(file_paths: list[str], holder: str, task_id: int):
+    """Auto-lock files for a task. Soft-warn on conflicts (no hard block)."""
+    if not autonomy:
+        return
+    for path in file_paths:
+        try:
+            result = asyncio.run(autonomy.lock_acquire(
+                path=path, holder=holder, mode="write", ttl_minutes=60
+            ))
+            if result["status"] == "granted":
+                logger.info(f"[auto-lock] {path} locked by {holder} (task #{task_id})")
+            elif result["status"] == "denied":
+                conflicts = result.get("conflicts", [])
+                held_by = conflicts[0]["holder"] if conflicts else "unknown"
+                logger.warning(f"[auto-lock] {path} already locked by {held_by} (task #{task_id})")
+                _bot_send("#general",
+                    f"\u26a0\ufe0f **LOCK CONFLICT** `{path}` is locked by {held_by} "
+                    f"-- {holder} (task #{task_id}) proceeding with warning",
+                    from_id="@system")
+        except Exception as e:
+            logger.error(f"[auto-lock] Failed to lock {path}: {e}")
+
+
+def _auto_release_locks(holder: str, task_id: int):
+    """Release all locks held by an agent when their task completes."""
+    if not autonomy:
+        return
+    released = []
+    for path in list(autonomy.locks.keys()):
+        lock = autonomy.locks.get(path)
+        if lock and lock.holder == holder:
+            try:
+                asyncio.run(autonomy.lock_release(path, holder))
+                released.append(path)
+            except Exception as e:
+                logger.error(f"[auto-lock] Failed to release {path}: {e}")
+    if released:
+        files = ", ".join(f"`{p}`" for p in released)
+        logger.info(f"[auto-lock] Released {len(released)} lock(s) for {holder} (task #{task_id}): {files}")
 
 
 # ---------------------------------------------------------------------------
@@ -107,13 +174,19 @@ def post_task(handler, body):
             msg = f"\U0001f4cb **TASK #{task_id}** created for {agent_id}{proj_tag}: {description[:80]}{wf_tag}"
             _bot_send("#general", msg, from_id="@taskman")
 
+            # Auto-lock files mentioned in task description (Brainstorm #7)
+            file_paths = _extract_file_paths(description)
+            if file_paths:
+                _auto_lock_files(file_paths, agent_id, task_id)
+
             handler.send_json({
                 "status": "created",
                 "task_id": task_id,
                 "agent_id": agent_id,
                 "task_type": task_type,
                 "description": description,
-                "workflow_id": linked_wf_id
+                "workflow_id": linked_wf_id,
+                "locked_files": file_paths,
             })
         else:
             handler.send_json({"error": "Failed to create task"}, 500)
@@ -211,6 +284,11 @@ def post_task_complete(handler, body):
                                             bridge.emit_workflow(wf_updated)
                 except Exception as e:
                     print(f"[WORKFLOW] Auto-advance error on task complete: {e}")
+
+            # Auto-release locks held by this agent (Brainstorm #7)
+            task = storage.get_task_by_id(task_id)
+            if task:
+                _auto_release_locks(task.get("agent_id", ""), task_id)
 
             handler.send_json({"status": "completed", "success": True, "task_id": task_id, "final_status": status})
         else:

@@ -114,6 +114,15 @@ def task_watchdog():
                                 print(f"[WATCHDOG] Failed to notify lead: {e}")
                         time.sleep(0.3)  # Small delay to avoid message spam
 
+                # Auto-release locks for tasks about to be marked stale (Brainstorm #7)
+                if autonomy and stale_tasks:
+                    from handlers.tasks import _auto_release_locks  # deferred: circular import guard
+                    for t in stale_tasks:
+                        if t.get("ping_count", 0) + 1 >= TASK_MAX_PINGS:
+                            agent = t.get("agent_id", "")
+                            tid = t.get("id", 0)
+                            _auto_release_locks(agent, tid)
+
                 # Mark tasks that exceeded max pings as stale + final lead notification
                 marked = storage.mark_stale_tasks_as_stale(TASK_MAX_PINGS)
                 if marked > 0:
@@ -142,6 +151,10 @@ def task_watchdog():
                     pending_seconds=TASK_PENDING_WARN_SECONDS,
                     min_ping_interval=TASK_PENDING_MIN_PING_INTERVAL,
                 )
+                # v4.6: Prune escalated_pending -- remove IDs no longer pending (fixes leak)
+                current_pending_ids = {t.get("id") for t in pending_tasks}
+                escalated_pending &= current_pending_ids
+
                 for task in pending_tasks:
                     agent_id = task.get("agent_id", "")
                     task_id = task.get("id")
@@ -234,6 +247,9 @@ def presence_watchdog():
                         continue
 
                     seconds_ago = storage._seconds_since(last_seen)
+                    # v4.6: Guard against inf/NaN from _seconds_since (parse error)
+                    if not (0 <= seconds_ago < 1e9):
+                        continue
                     dead_threshold = get_agent_dead_seconds(agent_id)
                     away_threshold = get_agent_away_seconds(agent_id)
 
@@ -620,15 +636,10 @@ def review_watchdog():
                     created_at = review.get("created_at", "")
 
                     # Calculate review age in seconds
-                    try:
-                        from datetime import datetime, timezone
-                        # Parse created_at (SQLite format: "YYYY-MM-DD HH:MM:SS" or ISO8601)
-                        created_str = created_at.replace("T", " ").split(".")[0].replace("Z", "")
-                        created_dt = datetime.strptime(created_str, "%Y-%m-%d %H:%M:%S")
-                        created_dt = created_dt.replace(tzinfo=timezone.utc)
-                        review_age = now - created_dt.timestamp()
-                    except (ValueError, AttributeError):
-                        review_age = 0  # Can't parse -> skip pings
+                    # v4.6: Use _seconds_since for consistency (fail-safe = escalate, not silence)
+                    review_age = storage._seconds_since(created_at)
+                    if not (0 <= review_age < 1e9):
+                        review_age = REVIEW_ESCALATE_SECONDS + 1
 
                     # Too young for first ping?
                     if review_age < REVIEW_PING_DELAY:
