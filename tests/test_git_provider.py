@@ -27,7 +27,6 @@ from pytest_httpx import HTTPXMock
 from git_provider import (
     AuthError,
     Comment,
-    DryRunGate,
     GitHubProvider,
     GitProviderError,
     Issue,
@@ -826,93 +825,3 @@ class TestProtocolConformance:
         bp = BadProvider()
         assert not isinstance(bp, IssueProvider)
 
-
-# ===========================================================================
-# 10. DryRunGate tests
-# ===========================================================================
-
-class TestDryRunGate:
-
-    def test_dry_run_logs_action(self, provider: GitHubProvider):
-        """Dry-run mode logs the action without calling the provider."""
-        gate = DryRunGate(provider, dry_run=True)
-        result = gate.execute("comment", repo=REPO, number=42, body="test")
-        assert result["status"] == "dry_run"
-        assert result["would_execute"] == "comment"
-        assert len(gate.action_log) == 1
-        assert gate.action_log[0]["dry_run"] is True
-
-    def test_dry_run_no_http_calls(
-        self, provider: GitHubProvider, httpx_mock: HTTPXMock
-    ):
-        """Dry-run mode makes zero HTTP requests."""
-        gate = DryRunGate(provider, dry_run=True)
-        gate.execute("comment", repo=REPO, number=42, body="test")
-        assert len(httpx_mock.get_requests()) == 0
-
-    def test_live_mode_without_approval_raises(self, provider: GitHubProvider):
-        """Live mode without approval raises NotApprovedError."""
-        gate = DryRunGate(
-            provider, dry_run=False,
-            approval_checker=lambda action, params: False,
-        )
-        with pytest.raises(NotApprovedError):
-            gate.execute("comment", repo=REPO, number=42, body="test")
-
-    def test_live_mode_with_approval_executes(
-        self, provider: GitHubProvider, httpx_mock: HTTPXMock
-    ):
-        """Live mode with approval calls the provider."""
-        httpx_mock.add_response(
-            url=f"https://api.github.com/repos/{REPO}/issues/42/comments",
-            json=_comment_json(id=50, body="approved comment"),
-            status_code=201,
-        )
-        gate = DryRunGate(
-            provider, dry_run=False,
-            approval_checker=lambda action, params: True,
-        )
-        result = gate.execute("comment", repo=REPO, number=42, body="approved comment")
-        assert result["status"] == "executed"
-        assert isinstance(result["result"], Comment)
-
-    def test_get_pending_actions(self, provider: GitHubProvider):
-        """get_pending_actions() returns only dry-run entries."""
-        gate = DryRunGate(provider, dry_run=True)
-        gate.execute("comment", repo=REPO, number=1, body="a")
-        gate.execute("add_label", repo=REPO, number=2, labels=["bug"])
-        pending = gate.get_pending_actions()
-        assert len(pending) == 2
-        assert all(e["dry_run"] for e in pending)
-
-    def test_unknown_action_raises(
-        self, provider: GitHubProvider, httpx_mock: HTTPXMock
-    ):
-        """Unknown action in live mode raises GitProviderError."""
-        gate = DryRunGate(
-            provider, dry_run=False,
-            approval_checker=lambda action, params: True,
-        )
-        with pytest.raises(GitProviderError, match="Unknown provider action"):
-            gate.execute("nonexistent_method", repo=REPO)
-
-    def test_no_approval_checker_allows_all(
-        self, provider: GitHubProvider, httpx_mock: HTTPXMock
-    ):
-        """Live mode without approval_checker allows all actions."""
-        httpx_mock.add_response(
-            url=f"https://api.github.com/repos/{REPO}/issues/42/comments",
-            json=_comment_json(id=60, body="no gate"),
-            status_code=201,
-        )
-        gate = DryRunGate(provider, dry_run=False, approval_checker=None)
-        result = gate.execute("comment", repo=REPO, number=42, body="no gate")
-        assert result["status"] == "executed"
-
-    def test_action_log_has_timestamp(self, provider: GitHubProvider):
-        """Every action log entry has a timestamp."""
-        gate = DryRunGate(provider, dry_run=True)
-        gate.execute("comment", repo=REPO, number=1, body="t")
-        assert "timestamp" in gate.action_log[0]
-        # ISO format check
-        assert "T" in gate.action_log[0]["timestamp"]

@@ -1,8 +1,8 @@
-"""Git hosting issue provider -- Phase 1 (read-only MVP).
+"""Git hosting issue provider -- Phase 1 + Phase 2.
 
 Provider abstraction for Git hosting platforms (GitHub, Gitea, etc.).
-Phase 1: GitHubProvider with list_issues() + get_issue() only.
-Phase 2: Write operations (comment, label, create_pr) via DryRunGate.
+Phase 1: GitHubProvider read-only (list_issues, get_issue).
+Phase 2: Write ops (comment, label, create_pr) via DryRunGate.
 
 Architecture decisions (Brainstorm #6, IDEA #5):
 - Direct REST API via httpx -- no gh CLI subprocess
@@ -23,7 +23,7 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 
-__version__ = "0.1.0"  # Phase 1 read-only MVP
+__version__ = "0.2.0"  # Phase 2 MVP: write ops via dry_run_gate.py
 
 logger = logging.getLogger("git_provider")
 
@@ -564,85 +564,7 @@ class GitHubProvider:
 
 
 # ---------------------------------------------------------------------------
-# DryRunGate -- safety layer for all write operations
+# DryRunGate -- MOVED to dry_run_gate.py (Brainstorm #9)
+# Backward-compat re-export kept here so existing imports don't break.
 # ---------------------------------------------------------------------------
-
-class DryRunGate:
-    """All write operations go through this gate.
-
-    dry_run=True (default): logs the action, returns a preview dict.
-    dry_run=False (live):   checks dashboard approval, then executes.
-
-    Every action is logged to the audit trail regardless of mode.
-    The dashboard can query action_log to show "would have done" previews.
-    """
-
-    def __init__(
-        self,
-        provider: IssueProvider,
-        dry_run: bool = True,
-        approval_checker=None,
-    ):
-        """
-        Args:
-            provider: The IssueProvider to delegate write calls to.
-            dry_run: If True, never actually calls write methods.
-            approval_checker: Optional callable(action: str, params: dict) -> bool.
-                Returns True if the action was approved in the dashboard.
-        """
-        self.provider = provider
-        self.dry_run = dry_run
-        self._approval_checker = approval_checker
-        self.action_log: list[dict] = []
-
-    def execute(self, action: str, **kwargs) -> dict:
-        """Execute a write action through the safety gate.
-
-        Args:
-            action: Method name on the provider (e.g. "comment").
-            **kwargs: Arguments passed to the provider method.
-
-        Returns:
-            Dict with keys: status, action, params, and optionally result.
-
-        Raises:
-            NotApprovedError: Live mode and action not approved.
-            GitProviderError: Underlying provider error.
-        """
-        entry = {
-            "action": action,
-            "params": kwargs,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "dry_run": self.dry_run,
-        }
-        self.action_log.append(entry)
-
-        if self.dry_run:
-            logger.info("[DRY-RUN] Would execute: %s(%s)", action, kwargs)
-            return {
-                "status": "dry_run",
-                "would_execute": action,
-                **kwargs,
-            }
-
-        # Live mode -- approval required
-        if self._approval_checker and not self._approval_checker(action, kwargs):
-            raise NotApprovedError(
-                f"Action '{action}' not approved in dashboard"
-            )
-
-        method = getattr(self.provider, action, None)
-        if method is None:
-            raise GitProviderError(f"Unknown provider action: {action}")
-
-        result = method(**kwargs)
-        entry["result"] = repr(result)[:500]
-        return {
-            "status": "executed",
-            "action": action,
-            "result": result,
-        }
-
-    def get_pending_actions(self) -> list[dict]:
-        """Return all dry-run actions (for dashboard queue display)."""
-        return [e for e in self.action_log if e.get("dry_run")]
+from dry_run_gate import DryRunGate  # noqa: F401 -- re-export for compat

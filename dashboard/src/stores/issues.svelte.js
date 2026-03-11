@@ -23,12 +23,20 @@ let _syncTimer = null;
 
 // -- Derived state --
 
+let openIssues = $derived(
+  issues.filter(i => i.state === 'open')
+);
+
 let unassigned = $derived(
-  issues.filter(i => !i.agents || i.agents.length === 0)
+  openIssues.filter(i => !i.agents || i.agents.length === 0)
 );
 
 let inProgress = $derived(
-  issues.filter(i => i.agents && i.agents.length > 0)
+  openIssues.filter(i => i.agents && i.agents.length > 0)
+);
+
+let closedIssues = $derived(
+  issues.filter(i => i.state !== 'open')
 );
 
 let pendingCount = $derived(
@@ -41,7 +49,7 @@ async function _fetchIssues() {
   try {
     loading = true;
     const [issRes, qRes] = await Promise.all([
-      fetch('/api/github/issues'),
+      fetch('/api/github/issues?state=all'),
       fetch('/api/github/queue'),
     ]);
 
@@ -97,7 +105,15 @@ function _parseLabels(labels) {
 async function refreshFromGitHub() {
   try {
     loading = true;
-    const res = await fetch('/api/github/issues?refresh=1');
+    // First: refresh open issues from GitHub (updates cache, marks closed)
+    const refreshRes = await fetch('/api/github/issues?refresh=1');
+    if (!refreshRes.ok) {
+      const data = await refreshRes.json().catch(() => ({}));
+      error = data.error || `HTTP ${refreshRes.status}`;
+      return;
+    }
+    // Then: fetch all (open + closed) from cache for display
+    const res = await fetch('/api/github/issues?state=all');
     if (res.ok) {
       const data = await res.json();
       issues = (data.issues || []).map(_mapIssue);
@@ -185,6 +201,8 @@ function cleanup() {
 
 export const issuesStore = {
   get issues()       { return issues; },
+  get openIssues()   { return openIssues; },
+  get closedIssues() { return closedIssues; },
   get queue()        { return queue; },
   get loading()      { return loading; },
   get error()        { return error; },

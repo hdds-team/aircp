@@ -2898,6 +2898,27 @@ class AIRCPStorage:
                     now,
                 ))
                 count += 1
+            # Mark issues no longer in the open set as closed.
+            # When we fetch state=open from GitHub, any cached 'open' issue
+            # NOT in the response has been closed upstream.
+            fetched_numbers = {issue.get("number", 0) for issue in issues}
+            all_open_in_cache = {
+                row[0] for row in c.execute(
+                    "SELECT issue_number FROM git_issue_cache "
+                    "WHERE repo_id = ? AND state IN ('open')",
+                    (repo_id,),
+                ).fetchall()
+            }
+            stale_numbers = all_open_in_cache - fetched_numbers
+            if stale_numbers:
+                placeholders = ",".join("?" for _ in stale_numbers)
+                c.execute(
+                    f"UPDATE git_issue_cache SET state = 'closed', cached_at = ? "
+                    f"WHERE repo_id = ? AND issue_number IN ({placeholders})",
+                    (now, repo_id, *stale_numbers),
+                )
+                logger.debug(f"[git] Marked {len(stale_numbers)} stale issues as closed")
+
             conn.commit()
             logger.debug(f"[git] Cached {count} issues for repo_id={repo_id}")
             return count

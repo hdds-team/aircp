@@ -13,6 +13,7 @@
   let now = $state(Date.now());
   let completedOpen = $state(false);
   let closedReviewsOpen = $state(false);
+  let closedIssuesOpen = $state(false);
 
   // Issues panel state
   let assignOpen = $state(null);
@@ -545,6 +546,24 @@
             </div>
           {/each}
         {/if}
+
+        <!-- Closed Issues (collapsible) -->
+        {#if issuesStore.closedIssues.length > 0}
+          <button class="completed-toggle" onclick={() => closedIssuesOpen = !closedIssuesOpen}>
+            {closedIssuesOpen ? '\u25BE' : '\u25B8'} Closed ({issuesStore.closedIssues.length})
+          </button>
+          {#if closedIssuesOpen}
+            {#each issuesStore.closedIssues as issue}
+              <div class="issue-card issue-closed">
+                <div class="issue-header">
+                  <span class="issue-number">#{issue.number}</span>
+                  <span class="issue-title">{issue.title}</span>
+                  <a class="issue-link" href={issue.url} target="_blank" rel="noopener">&nearr;</a>
+                </div>
+              </div>
+            {/each}
+          {/if}
+        {/if}
       </div>
 
     <!-- WORKFLOW -->
@@ -998,6 +1017,8 @@
     border-radius: 4px;
     border: 1px solid var(--border-subtle);
   }
+  .issue-closed { opacity: 0.5; }
+  .issue-closed:hover { opacity: 0.8; }
   .issue-header { display: flex; align-items: center; gap: 4px; }
   .issue-number { font-weight: 600; font-size: 12px; color: var(--info); flex-shrink: 0; }
   .issue-title {

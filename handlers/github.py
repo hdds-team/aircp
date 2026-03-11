@@ -1,4 +1,4 @@
-"""GitHub Agent Mode routes: /api/github/*
+"""GitHub Agent Mode routes: /api/github/*  (Phase 1 + Phase 2 MVP)
 
 Phase 1 (read-only MVP):
 - GET  /api/github/issues  -- cached issue list
@@ -6,6 +6,10 @@ Phase 1 (read-only MVP):
 - POST /api/github/assign  -- assign agent(s) to issue
 - POST /api/github/approve -- approve a queued action
 - POST /api/github/reject  -- reject a queued action
+
+Phase 2 (write MVP -- Brainstorm #9):
+- POST /api/github/comment  -- queue a comment (via DryRunGate)
+- POST /api/github/execute  -- execute an approved action
 
 Reference: docs/_private/WIP_GIT_REPO_MODE-IDEA.md
 """
@@ -17,6 +21,10 @@ logger = logging.getLogger("handlers.github")
 
 # Lazy import to avoid circular deps -- same pattern as tasks.py
 from aircp_daemon import storage, _bot_send
+
+# DryRunGate is initialized lazily alongside the provider
+_gate = None
+_gate_init_attempted = False
 
 # Provider is initialized lazily on first use
 _provider = None
@@ -54,6 +62,46 @@ def _get_provider():
     except Exception as e:
         logger.error(f"Failed to initialize GitHub provider: {e}")
     return _provider
+
+
+def _get_gate():
+    """Lazily initialize the DryRunGate.
+
+    Requires both a valid provider and a configured repo.
+    Returns None if prerequisites are missing.  Note: initialization is
+    attempted only once -- if GITHUB_TOKEN is absent at startup, a daemon
+    restart is required after setting it.  This is intentional (avoids
+    re-checking env on every request).
+    """
+    global _gate, _gate_init_attempted
+    if _gate_init_attempted:
+        return _gate
+    _gate_init_attempted = True
+
+    provider = _get_provider()
+    if provider is None:
+        logger.warning("DryRunGate unavailable -- no provider")
+        return None
+
+    repo_id = _ensure_default_repo()
+    if repo_id is None:
+        logger.warning("DryRunGate unavailable -- no repo configured")
+        return None
+
+    try:
+        from dry_run_gate import DryRunGate
+        # Phase 2 MVP: always dry_run=True.  @naskel flips to False
+        # once the queue has been validated in production.
+        live = os.environ.get("GITHUB_LIVE_MODE", "") == "1"
+        _gate = DryRunGate(
+            provider=provider, storage=storage,
+            repo_id=repo_id, dry_run=not live,
+        )
+        mode = "LIVE" if live else "DRY-RUN"
+        logger.info("DryRunGate initialized (%s mode)", mode)
+    except Exception as e:
+        logger.error(f"Failed to initialize DryRunGate: {e}")
+    return _gate
 
 
 def _ensure_default_repo():
@@ -168,7 +216,112 @@ def get_github_queue(handler, parsed, params):
 
 
 # ---------------------------------------------------------------------------
-# POST handlers
+# POST handlers -- Phase 2 write operations
+# ---------------------------------------------------------------------------
+
+def post_github_comment(handler, body):
+    """POST /api/github/comment -- queue a comment via DryRunGate.
+
+    Body:
+        issue_number: int (required)
+        body: str (required) -- comment markdown
+        actor_id: str (default: "@system")
+    """
+    try:
+        issue_number = body.get("issue_number")
+        comment_body = body.get("body", "")
+        actor_id = body.get("actor_id", "@system")
+
+        if not issue_number:
+            handler.send_json({"error": "Missing 'issue_number'"}, 400)
+            return
+        try:
+            issue_number = int(issue_number)
+        except (ValueError, TypeError):
+            handler.send_json({"error": "Invalid 'issue_number': must be an integer"}, 400)
+            return
+        if not comment_body:
+            handler.send_json({"error": "Missing 'body'"}, 400)
+            return
+        if len(comment_body) > 65536:
+            handler.send_json({"error": "Comment body too long (max 64KB)"}, 400)
+            return
+
+        gate = _get_gate()
+        if gate is None:
+            handler.send_json(
+                {"error": "DryRunGate not available (check GITHUB_TOKEN)"},
+                503,
+            )
+            return
+
+        queued = gate.comment(
+            repo="hdds-team/aircp",
+            number=issue_number,
+            body=comment_body,
+            actor_id=actor_id,
+        )
+
+        _bot_send(
+            "#general",
+            f"\U0001f4dd **GitHub** {actor_id} queued comment on "
+            f"#{issue_number} (action #{queued.action_id}, "
+            f"{'dry-run' if gate.dry_run else 'pending approval'})",
+            from_id="@github",
+        )
+
+        handler.send_json(queued.to_dict(), 201)
+
+    except Exception as e:
+        logger.error(f"GitHub comment error: {e}")
+        handler.send_json({"error": str(e)}, 500)
+
+
+def post_github_execute(handler, body):
+    """POST /api/github/execute -- execute an approved action.
+
+    Body:
+        action_id: int (required)
+    """
+    try:
+        action_id = body.get("action_id")
+        if not action_id:
+            handler.send_json({"error": "Missing 'action_id'"}, 400)
+            return
+
+        gate = _get_gate()
+        if gate is None:
+            handler.send_json(
+                {"error": "DryRunGate not available (check GITHUB_TOKEN)"},
+                503,
+            )
+            return
+
+        executed = gate.execute_approved(int(action_id))
+
+        _bot_send(
+            "#general",
+            f"\u2705 **GitHub** action #{action_id} "
+            f"({executed.action_type}) executed successfully",
+            from_id="@github",
+        )
+
+        handler.send_json(executed.to_dict())
+
+    except Exception as e:
+        logger.error(f"GitHub execute error: {e}")
+        from git_provider import GitProviderError, NotApprovedError
+        if isinstance(e, NotApprovedError):
+            status = 409
+        elif isinstance(e, GitProviderError) and "not found" in str(e).lower():
+            status = 404
+        else:
+            status = 500
+        handler.send_json({"error": str(e)}, status)
+
+
+# ---------------------------------------------------------------------------
+# POST handlers -- Phase 1
 # ---------------------------------------------------------------------------
 
 def post_github_assign(handler, body):
@@ -377,4 +530,6 @@ POST_ROUTES = {
     "/api/github/assign": post_github_assign,
     "/api/github/approve": post_github_approve,
     "/api/github/reject": post_github_reject,
+    "/api/github/comment": post_github_comment,
+    "/api/github/execute": post_github_execute,
 }
