@@ -1,4 +1,4 @@
-"""GitHub Agent Mode routes: /api/github/*  (Phase 1 + Phase 2 MVP)
+"""GitHub Agent Mode routes: /api/github/*  (Phase 1 + Phase 2 MVP + Multi-repo)
 
 Phase 1 (read-only MVP):
 - GET  /api/github/issues  -- cached issue list
@@ -10,6 +10,10 @@ Phase 1 (read-only MVP):
 Phase 2 (write MVP -- Brainstorm #9):
 - POST /api/github/comment  -- queue a comment (via DryRunGate)
 - POST /api/github/execute  -- execute an approved action
+
+Multi-repo (Idea #13 -- Phase 1 switch-mode):
+- GET  /api/github/repos         -- list registered repos + active repo
+- POST /api/github/repos/switch  -- switch active repo
 
 Reference: docs/_private/WIP_GIT_REPO_MODE-IDEA.md
 """
@@ -30,6 +34,125 @@ _gate_init_attempted = False
 _provider = None
 _provider_init_attempted = False
 
+# Multi-repo state (Idea #13 -- Phase 1 switch-mode)
+_repos_initialized = False
+_active_repo_name = None  # None = use first registered repo
+
+
+# ---------------------------------------------------------------------------
+# Multi-repo registry (Idea #13)
+# ---------------------------------------------------------------------------
+
+def _init_repos():
+    """Initialize repo registry from GITHUB_REPOS env var.
+
+    Format: "name:owner/repo,name2:owner2/repo2"
+    Example: "aircp:hdds-team/aircp,hdds:hdds-team/hdds"
+
+    Backward compat: if GITHUB_REPOS is not set, registers the default
+    "hdds-team/aircp" repo (same as Phase 1 behavior).
+    """
+    global _repos_initialized, _active_repo_name
+    if _repos_initialized:
+        return
+    _repos_initialized = True
+
+    repos_env = os.environ.get("GITHUB_REPOS", "")
+    if not repos_env:
+        # Backward compat -- register default repo only
+        _ensure_repo("aircp", "hdds-team", "https://github.com/hdds-team/aircp")
+        _active_repo_name = "aircp"
+        logger.info("Multi-repo: backward compat mode (single repo: aircp)")
+        return
+
+    first_name = None
+    for entry in repos_env.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" not in entry:
+            logger.warning(
+                "Multi-repo: skipping malformed entry '%s' "
+                "(expected name:owner/repo)", entry
+            )
+            continue
+        name, owner_repo = entry.split(":", 1)
+        name = name.strip()
+        owner_repo = owner_repo.strip()
+        if "/" not in owner_repo:
+            logger.warning(
+                "Multi-repo: skipping '%s' -- owner/repo must contain '/'",
+                entry
+            )
+            continue
+        owner = owner_repo.split("/")[0]
+        html_url = f"https://github.com/{owner_repo}"
+        _ensure_repo(name, owner, html_url)
+        if first_name is None:
+            first_name = name
+
+    _active_repo_name = first_name
+    count = len(storage.get_all_git_repos())
+    logger.info(
+        "Multi-repo: registered %d repos, active=%s", count, _active_repo_name
+    )
+
+
+def _ensure_repo(name: str, owner: str, html_url: str = "") -> int | None:
+    """Ensure a repo is registered in storage. Returns repo_id or None."""
+    repo = storage.get_git_repo(name=name)
+    if repo:
+        return repo["id"]
+    repo_id = storage.add_git_repo(
+        name=name,
+        owner=owner,
+        source="github",
+        api_url="https://api.github.com",
+        html_url=html_url,
+        default_branch="main",
+    )
+    return repo_id if repo_id and repo_id > 0 else None
+
+
+def _get_repo(name: str = None):
+    """Get repo info by name, or use the active repo.
+
+    Returns (repo_id, "owner/repo") or (None, None).
+    """
+    _init_repos()
+    target = name or _active_repo_name
+    if not target:
+        return None, None
+    repo = storage.get_git_repo(name=target)
+    if not repo:
+        return None, None
+    owner_repo = f"{repo['owner']}/{repo['name']}"
+    return repo["id"], owner_repo
+
+
+def _get_active_repo_name() -> str | None:
+    """Return the currently active repo name."""
+    _init_repos()
+    return _active_repo_name
+
+
+def _set_active_repo(name: str) -> bool:
+    """Switch the active repo. Returns True if valid."""
+    global _active_repo_name
+    _init_repos()
+    repo = storage.get_git_repo(name=name)
+    if not repo:
+        return False
+    if not repo.get("enabled", True):
+        return False
+    _active_repo_name = name
+    logger.info("Multi-repo: switched active repo to '%s'", name)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Provider + DryRunGate initialization (unchanged from Phase 1/2)
+# ---------------------------------------------------------------------------
 
 def _get_provider():
     """Lazily initialize the GitHubProvider from env var.
@@ -83,7 +206,7 @@ def _get_gate():
         logger.warning("DryRunGate unavailable -- no provider")
         return None
 
-    repo_id = _ensure_default_repo()
+    repo_id, _ = _get_repo()
     if repo_id is None:
         logger.warning("DryRunGate unavailable -- no repo configured")
         return None
@@ -104,43 +227,26 @@ def _get_gate():
     return _gate
 
 
-def _ensure_default_repo():
-    """Ensure the default repo (hdds-team/aircp) is registered.
-
-    Returns the repo_id or None.
-    """
-    repo = storage.get_git_repo(name="aircp")
-    if repo:
-        return repo["id"]
-
-    repo_id = storage.add_git_repo(
-        name="aircp",
-        owner="hdds-team",
-        source="github",
-        api_url="https://api.github.com",
-        html_url="https://github.com/hdds-team/aircp",
-        default_branch="main",
-    )
-    return repo_id if repo_id > 0 else None
-
-
 # ---------------------------------------------------------------------------
 # GET handlers
 # ---------------------------------------------------------------------------
 
 def get_github_issues(handler, parsed, params):
-    """GET /api/github/issues -- return cached issue list.
+    """GET /api/github/issues -- return cached issue list for active/specified repo.
 
     Query params:
         state: "open" (default), "closed", "all"
         refresh: "1" to force refresh from GitHub API
+        repo: repo name to query (default: active repo)
     """
     state = params.get("state", ["open"])[0]
     refresh = params.get("refresh", ["0"])[0] == "1"
+    repo_name = params.get("repo", [None])[0]
 
-    repo_id = _ensure_default_repo()
+    repo_id, owner_repo = _get_repo(repo_name)
     if repo_id is None:
-        handler.send_json({"error": "No repo configured"}, 500)
+        msg = f"Repo '{repo_name}' not found" if repo_name else "No repo configured"
+        handler.send_json({"error": msg}, 404 if repo_name else 500)
         return
 
     # Refresh cache from GitHub if requested
@@ -154,7 +260,7 @@ def get_github_issues(handler, parsed, params):
             return
 
         try:
-            issues = provider.list_issues("hdds-team/aircp", state=state)
+            issues = provider.list_issues(owner_repo, state=state)
             # Convert Issue dataclasses to dicts for caching
             issue_dicts = []
             for iss in issues:
@@ -196,23 +302,72 @@ def get_github_issues(handler, parsed, params):
     handler.send_json({
         "issues": cached,
         "count": len(cached),
-        "repo": "hdds-team/aircp",
+        "repo": owner_repo,
+        "repo_name": repo_name or _active_repo_name,
         "state": state,
     })
 
 
 def get_github_queue(handler, parsed, params):
-    """GET /api/github/queue -- pending actions awaiting approval."""
-    repo_id = _ensure_default_repo()
+    """GET /api/github/queue -- pending actions awaiting approval.
+
+    Query params:
+        repo: repo name (default: active repo)
+    """
+    repo_name = params.get("repo", [None])[0]
+    repo_id, owner_repo = _get_repo(repo_name)
     if repo_id is None:
-        handler.send_json({"error": "No repo configured"}, 500)
+        handler.send_json({"error": "No repo configured"}, 404)
         return
 
     pending = storage.get_pending_git_actions(repo_id=repo_id)
     handler.send_json({
         "queue": pending,
         "count": len(pending),
+        "repo": owner_repo,
     })
+
+
+def get_github_repos(handler, parsed, params):
+    """GET /api/github/repos -- list registered repos + active repo."""
+    _init_repos()
+    repos = storage.get_all_git_repos(enabled_only=False)
+    result = []
+    for r in repos:
+        result.append({
+            "name": r["name"],
+            "owner": r["owner"],
+            "owner_repo": f"{r['owner']}/{r['name']}",
+            "source": r["source"],
+            "html_url": r.get("html_url", ""),
+            "enabled": bool(r.get("enabled", 1)),
+            "active": r["name"] == _active_repo_name,
+        })
+    handler.send_json({
+        "repos": result,
+        "active": _active_repo_name,
+        "count": len(result),
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST handlers -- Multi-repo (Idea #13)
+# ---------------------------------------------------------------------------
+
+def post_github_switch_repo(handler, body):
+    """POST /api/github/repos/switch -- switch active repo.
+
+    Body:
+        name: str (required) -- repo name to switch to
+    """
+    name = body.get("name", "")
+    if not name:
+        handler.send_json({"error": "Missing 'name'"}, 400)
+        return
+    if _set_active_repo(name):
+        handler.send_json({"status": "switched", "active": name})
+    else:
+        handler.send_json({"error": f"Repo '{name}' not found or disabled"}, 404)
 
 
 # ---------------------------------------------------------------------------
@@ -255,8 +410,13 @@ def post_github_comment(handler, body):
             )
             return
 
+        repo_id, owner_repo = _get_repo()
+        if repo_id is None:
+            handler.send_json({"error": "No repo configured"}, 500)
+            return
+
         queued = gate.comment(
-            repo="hdds-team/aircp",
+            repo=owner_repo,
             number=issue_number,
             body=comment_body,
             actor_id=actor_id,
@@ -332,11 +492,13 @@ def post_github_assign(handler, body):
         agent_id: str (required) -- agent to assign
         role: str -- "triage", "investigate", "code", "review" (default: "investigate")
         auto_task: bool -- create AIRCP task automatically (default: true)
+        repo: str -- repo name (default: active repo)
     """
     try:
         issue_number = body.get("issue_number")
         agent_id = body.get("agent_id")
         role = body.get("role", "investigate")
+        repo_name = body.get("repo")
 
         if not issue_number:
             handler.send_json({"error": "Missing 'issue_number'"}, 400)
@@ -354,7 +516,7 @@ def post_github_assign(handler, body):
             )
             return
 
-        repo_id = _ensure_default_repo()
+        repo_id, owner_repo = _get_repo(repo_name)
         if repo_id is None:
             handler.send_json({"error": "No repo configured"}, 500)
             return
@@ -381,7 +543,7 @@ def post_github_assign(handler, body):
             task_id = storage.create_task(
                 agent_id, "github_issue", task_desc,
                 context={"issue_number": issue_number, "role": role,
-                         "repo": "hdds-team/aircp"},
+                          "repo": owner_repo},
             )
             if task_id > 0:
                 _bot_send(
@@ -524,6 +686,7 @@ def post_github_reject(handler, body):
 GET_ROUTES = {
     "/api/github/issues": get_github_issues,
     "/api/github/queue": get_github_queue,
+    "/api/github/repos": get_github_repos,
 }
 
 POST_ROUTES = {
@@ -532,4 +695,5 @@ POST_ROUTES = {
     "/api/github/reject": post_github_reject,
     "/api/github/comment": post_github_comment,
     "/api/github/execute": post_github_execute,
+    "/api/github/repos/switch": post_github_switch_repo,
 }

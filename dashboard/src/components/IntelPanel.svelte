@@ -434,8 +434,21 @@
     {:else if activeTab === 'issues'}
       <div class="panel">
         <div class="issues-toolbar">
-          <button class="issues-refresh" onclick={() => issuesStore.refreshFromGitHub()} disabled={issuesStore.loading}>
-            {issuesStore.loading ? '...' : '↻ Refresh'}
+          {#if issuesStore.repos.length > 1}
+            <select
+              class="repo-selector"
+              value={issuesStore.currentRepo?.name || ''}
+              onchange={(e) => issuesStore.switchRepo(e.target.value)}
+            >
+              {#each issuesStore.repos.filter(r => r.enabled) as repo}
+                <option value={repo.name}>{repo.owner_repo}</option>
+              {/each}
+            </select>
+          {:else if issuesStore.currentRepo}
+            <span class="repo-label">{issuesStore.currentRepo.owner_repo || issuesStore.currentRepo.name}</span>
+          {/if}
+          <button class="issues-refresh" style="margin-left:auto" onclick={() => issuesStore.refreshFromGitHub()} disabled={issuesStore.loading}>
+            {issuesStore.loading ? '⏳' : '↻ Refresh'}
           </button>
           {#if issuesStore.error}
             <span class="issues-error" title={issuesStore.error}>⚠</span>
@@ -1081,6 +1094,17 @@
   .issues-refresh:hover { border-color: var(--info); color: var(--info); }
   .issues-refresh:disabled { opacity: 0.4; cursor: not-allowed; }
   .issues-error { color: var(--warning); font-size: 14px; cursor: help; }
+  .repo-selector {
+    font-size: 10px; padding: 2px 4px;
+    border: 1px solid var(--border); background: var(--bg-secondary);
+    color: var(--text-primary); border-radius: 3px; cursor: pointer;
+    max-width: 180px;
+  }
+  .repo-selector:hover { border-color: var(--info); }
+  .repo-label {
+    font-size: 10px; color: var(--text-secondary);
+    font-weight: 600; white-space: nowrap;
+  }
   .issues-section-title {
     font-size: 10px; font-weight: 600; color: var(--text-muted);
     text-transform: uppercase; padding: 4px 0 2px;

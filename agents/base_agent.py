@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 import time
+from collections import deque
 from typing import Dict, Any
 
 # Add transport to path
@@ -107,7 +108,14 @@ class PersistentAgent(TaskWorkerMixin, ABC):
         self.last_response_time: dict[str, float] = {}
 
         # Track message IDs we've already processed (prevent double-response)
-        self.processed_message_ids: set[str] = set()
+        # deque with maxlen auto-evicts oldest entries (FIFO), unlike sorted() on
+        # UUIDs which is lexicographic and can drop recent IDs.
+        self.processed_message_ids: deque[str] = deque(maxlen=1000)
+
+        # Buffer for rate-limited messages (B2.1 fix: DDS take() is destructive,
+        # so we can't rely on last_seen rollback to re-deliver them)
+        # Each entry is (room, message) to preserve room association.
+        self._rate_limited_queue: list[tuple[str, AIRCPMessage]] = []
 
         # Initialize transport
         self.transport = AIRCPTransport(
@@ -617,16 +625,30 @@ class PersistentAgent(TaskWorkerMixin, ABC):
         # Track if we did real work this cycle (for recreational mode)
         had_messages_this_cycle = False
 
+        # B2.1: Drain rate-limited queue from previous cycle, grouped by room
+        prev_queued: dict[str, list] = {}
+        for room_key, msg in self._rate_limited_queue:
+            prev_queued.setdefault(room_key, []).append(msg)
+        self._rate_limited_queue = []
+
         for room in self.rooms:
-            # Get new messages
+            # Get new messages from DDS (destructive take())
             messages = self.transport.receive_new(room)
+
+            # Prepend rate-limited messages from previous cycle (B2.1 fix)
+            queued = prev_queued.pop(room, [])
+            queued_ids = {m.id for m in queued}
+            if queued:
+                logger.info(f"[{room}] Re-processing {len(queued)} rate-limited messages from previous cycle")
+                messages = queued + messages
 
             if not messages:
                 continue
 
-            # Filter out already-seen messages
+            # Filter out already-seen messages (exempt queued ones — their timestamps
+            # are older than last_seen since we advanced it when they were first received)
             last_seen_ts = self.state["last_seen"].get(room, 0)
-            messages = [m for m in messages if m.timestamp_ns > last_seen_ts]
+            messages = [m for m in messages if m.timestamp_ns > last_seen_ts or m.id in queued_ids]
 
             if not messages:
                 continue
@@ -634,11 +656,12 @@ class PersistentAgent(TaskWorkerMixin, ABC):
             logger.info(f"[{room}] Received {len(messages)} new messages")
             had_messages_this_cycle = True
 
-            # Store ALL messages to memory
-            self._append_memory(messages)
+            # Store ALL messages to memory (skip queued ones, already stored)
+            new_for_memory = [m for m in messages if m.id not in queued_ids]
+            if new_for_memory:
+                self._append_memory(new_for_memory)
 
             # Process messages we should respond to
-            had_rate_limited = False
             for msg in messages:
                 logger.debug(f"[{room}] Message from {msg.from_id}: {msg.payload}")
 
@@ -649,12 +672,6 @@ class PersistentAgent(TaskWorkerMixin, ABC):
 
                 if sender_normalized == my_id_normalized:
                     logger.debug(f"[{room}] Skipping own message (from: {sender})")
-                    continue
-
-                # Extra safety: skip if message mentions us AND is from us (self-reference loop)
-                content = msg.payload.get("content", "")
-                if sender_normalized == my_id_normalized and (self.agent_id in content or self.config.id in content):
-                    logger.warning(f"[{room}] LOOP DETECTED - skipping self-referential message")
                     continue
 
                 # Skip if we already processed this message ID (prevent double-response)
@@ -679,14 +696,17 @@ class PersistentAgent(TaskWorkerMixin, ABC):
                     logger.info(f"[{room}] STFU mode active - staying silent")
                     continue
 
-                # Rate limit check: skip if cooldown not elapsed
+                # Rate limit check: if cooldown not elapsed, queue for next cycle
                 now = time.time()
                 last_response = self.last_response_time.get(room, 0)
                 elapsed = now - last_response
                 if elapsed < self.config.cooldown_seconds:
                     remaining = self.config.cooldown_seconds - elapsed
-                    logger.info(f"[{room}] Rate limited: {remaining:.0f}s remaining")
-                    had_rate_limited = True
+                    logger.info(f"[{room}] Rate limited: {remaining:.0f}s remaining, queuing for next cycle")
+                    if len(self._rate_limited_queue) < 20:
+                        self._rate_limited_queue.append((room, msg))
+                    else:
+                        logger.warning(f"[{room}] Rate-limited queue full, dropping message {msg.id}")
                     continue
 
                 # Build context and generate response
@@ -723,13 +743,8 @@ class PersistentAgent(TaskWorkerMixin, ABC):
                     # Update rate limit tracker
                     self.last_response_time[room] = time.time()
 
-                    # Mark this message as processed
-                    self.processed_message_ids.add(msg.id)
-
-                    # Limit processed IDs set size (memory safety)
-                    if len(self.processed_message_ids) > 1000:
-                        # Keep only the 500 most recent (arbitrary trim)
-                        self.processed_message_ids = set(sorted(self.processed_message_ids)[-500:])
+                    # Mark this message as processed (deque auto-evicts oldest)
+                    self.processed_message_ids.append(msg.id)
 
                     # Save our own response to memory
                     self._save_own_response(room, response)
@@ -747,11 +762,9 @@ class PersistentAgent(TaskWorkerMixin, ABC):
                     except Exception:
                         pass
 
-            # Update last_seen — but NOT past rate-limited messages (B2 fix)
-            # If a message was rate-limited, don't advance last_seen so it's
-            # retried on the next heartbeat. processed_message_ids prevents
-            # double-responses for messages we already handled.
-            if messages and not had_rate_limited:
+            # Always advance last_seen (B2.1: messages are consumed by DDS take(),
+            # rate-limited ones are saved in _rate_limited_queue for next cycle)
+            if messages:
                 self.state["last_seen"][room] = messages[-1].timestamp_ns
 
         # === TaskWorkerMixin: Process assigned tasks ===

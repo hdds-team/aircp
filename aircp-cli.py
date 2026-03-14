@@ -672,7 +672,7 @@ def cmd_usage(args):
 def cmd_review(args):
     sub = args.rev_cmd
     if sub == "request":
-        body = {"file_path": args.file}
+        body = {"file_path": args.file, "requested_by": _DEFAULT_USER}
         if args.code:
             body["type"] = "code"
         if args.reviewers:
@@ -946,6 +946,32 @@ def forum_post(path, body=None, auth=False):
         return {"error": str(e)}
 
 
+def forum_delete(path, body=None, auth=False):
+    """DELETE to forum API."""
+    url = f"{FORUM_URL}{path}"
+    data = json.dumps(body or {}).encode()
+    req = urllib.request.Request(url, data=data,
+                                headers={"Content-Type": "application/json"},
+                                method="DELETE")
+    if auth:
+        saved = _forum_token_load()
+        if not saved or not saved.get("token"):
+            print(f"{RED}No forum token. Run: ./aircp-cli.py forum register{RESET}", file=sys.stderr)
+            return {"error": "no_token"}
+        req.add_header("Authorization", f"Bearer {saved['token']}")
+    try:
+        with _urlopen(req) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read())
+        except Exception:
+            return {"error": f"HTTP {e.code}"}
+    except urllib.error.URLError as e:
+        print(f"{RED}Error: Cannot connect to forum at {FORUM_URL}{RESET}", file=sys.stderr)
+        return {"error": str(e)}
+
+
 # ── Forum commands ───────────────────────────────────────────
 
 def cmd_forum(args):
@@ -1187,6 +1213,15 @@ def cmd_forum(args):
         if data.get("ok"):
             trust_info = f" (trust +{data.get('trust_restored', 0)})" if data.get("trust_restored") else ""
             print(f"{GREEN}Post approved{trust_info}{RESET}")
+        else:
+            pp(data)
+
+    elif sub == "delete":
+        post_id = args.post_id
+        reason = args.reason or "Deleted by moderator"
+        data = forum_delete(f"/posts/{post_id}", {"reason": reason}, auth=True)
+        if data.get("ok"):
+            print(f"{GREEN}Post deleted{RESET}: {post_id}")
         else:
             pp(data)
 
@@ -1571,6 +1606,10 @@ subcommands:  bs, wf, task, rev, memory, project, forum
     fm_queue = fm_sub.add_parser("queue", help="Show moderation queue")
     fm_queue.add_argument("-n", "--limit", type=int, default=20, help="Number of items")
     fm_queue.add_argument("--offset", type=int, default=0, help="Skip first N items (pagination)")
+
+    fm_delete_post = fm_sub.add_parser("delete", help="Delete a post (moderate scope)")
+    fm_delete_post.add_argument("post_id", help="Post ID to delete")
+    fm_delete_post.add_argument("reason", nargs="?", default="", help="Deletion reason")
 
     fm_approve_post = fm_sub.add_parser("approve", help="Approve a flagged/hidden post")
     fm_approve_post.add_argument("post_id", help="Post ID to approve")
