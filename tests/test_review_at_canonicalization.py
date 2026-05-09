@@ -233,5 +233,214 @@ class TestConsensusDedupeOnLegacyData(unittest.TestCase):
         )
 
 
+# ============================================================================
+# Task #159 PART 2 : read-side leaks discovered by @beta during the
+# 2026-05-09 post-restart smoke test on review #80.
+#
+# The write-path canonicalization (#159 part 1) stores responses sans "@",
+# but two read paths still compared raw `reviewers` (with "@") to the
+# canonical responses (without "@"), so a reviewer who had voted still
+# appeared as "pending" :
+#
+#   - handlers/reviews.py get_review_by_id  -> summary.reviewers_pending
+#   - watchdogs.py review_watchdog          -> non_voters list / ping tags
+#
+# Fix : strip "@" on both sides of the membership test, mirroring the
+# pattern already used by the brainstorm-vote watchdog.
+# ============================================================================
+
+
+class TestReviewersPendingCanonical(unittest.TestCase):
+    """handlers/reviews.py get_review_by_id : summary.reviewers_pending
+    must canonicalize both sides before comparing, otherwise a voter
+    stored as "beta" never matches the assigned "@beta" entry."""
+
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        self.storage = AIRCPStorage(db_path=self._tmp.name)
+        self.req_id = self.storage.create_review_request(
+            file_path="src/foo.cpp",
+            requested_by="alpha",
+            reviewers=["@beta", "@sonnet"],
+            review_type="code",
+            timeout_seconds=3600,
+        )
+
+    def tearDown(self):
+        try:
+            os.unlink(self._tmp.name)
+        except FileNotFoundError:
+            pass
+
+    def _summary_pending(self, review):
+        """Reproduce the production logic from handlers/reviews.py
+        get_review_by_id (post-fix). Kept inline rather than importing
+        the handler to avoid pulling in the HTTP layer for a unit test
+        on a set comprehension."""
+        responses = review.get("responses", [])
+        voted_canonical = {(resp.get("reviewer") or "").lstrip("@")
+                           for resp in responses}
+        return [r for r in review.get("reviewers", [])
+                if (r or "").lstrip("@") not in voted_canonical]
+
+    def test_pending_excludes_voter_after_mcp_vote(self):
+        """MCP vote stores reviewer='beta'; the assigned reviewers
+        list is ['@beta', '@sonnet']. Pending must collapse to
+        just '@sonnet', not still contain '@beta'."""
+        self.storage.add_review_response(
+            self.req_id, "beta", "approve", "MCP vote"
+        )
+        rev = self.storage.get_review_request(self.req_id)
+        pending = self._summary_pending(rev)
+        self.assertEqual(
+            pending, ["@sonnet"],
+            f"@beta voted but still appears pending: {pending}"
+        )
+
+    def test_pending_excludes_voter_after_chat_vote(self):
+        """Chat-detect vote (passes from_id='@beta') is canonicalized
+        at storage to 'beta'. Pending must still drop '@beta'."""
+        self.storage.add_review_response(
+            self.req_id, "@beta", "approve", "[chat] LGTM"
+        )
+        rev = self.storage.get_review_request(self.req_id)
+        pending = self._summary_pending(rev)
+        self.assertEqual(pending, ["@sonnet"])
+
+    def test_pending_empty_when_all_voted(self):
+        """Both reviewers vote -> pending is empty list."""
+        self.storage.add_review_response(self.req_id, "beta", "approve", "ok")
+        self.storage.add_review_response(self.req_id, "@sonnet", "approve", "ok")
+        rev = self.storage.get_review_request(self.req_id)
+        pending = self._summary_pending(rev)
+        self.assertEqual(pending, [])
+
+    def test_pending_handles_legacy_duplicate_rows(self):
+        """Legacy DB with both ('beta') and ('@beta') rows : neither
+        should make '@beta' show up as pending."""
+        conn = self.storage._get_conn()
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO review_responses "
+            "(request_id, reviewer, vote, comment, responded_at) "
+            "VALUES (?, ?, ?, ?, datetime('now'))",
+            (self.req_id, "beta", "approve", "MCP")
+        )
+        c.execute(
+            "INSERT INTO review_responses "
+            "(request_id, reviewer, vote, comment, responded_at) "
+            "VALUES (?, ?, ?, ?, datetime('now'))",
+            (self.req_id, "@beta", "approve", "[chat]")
+        )
+        conn.commit()
+        rev = self.storage.get_review_request(self.req_id)
+        pending = self._summary_pending(rev)
+        self.assertNotIn("@beta", pending)
+        self.assertEqual(pending, ["@sonnet"])
+
+    def test_handler_uses_canonical_logic(self):
+        """Smoke check that the production handler module actually
+        uses the canonicalizing comparison. Imports the module, votes,
+        then invokes the handler with a tiny mock and asserts the
+        resulting reviewers_pending."""
+        import importlib
+        import handlers.reviews as reviews_handler
+        # Wire the module's storage global to our temp DB.
+        reviews_handler.storage = self.storage
+
+        self.storage.add_review_response(
+            self.req_id, "beta", "approve", "MCP"
+        )
+
+        captured = {}
+
+        class _MockHandler:
+            def send_json(self, data, status=200):
+                captured["data"] = data
+                captured["status"] = status
+
+        class _MockParsed:
+            def __init__(self, req_id):
+                self.path = f"/review/status/{req_id}"
+
+        reviews_handler.get_review_by_id(
+            _MockHandler(), _MockParsed(self.req_id), {}
+        )
+        self.assertIn("data", captured, "handler did not call send_json")
+        summary = captured["data"].get("summary") or {}
+        self.assertEqual(
+            summary.get("reviewers_pending"), ["@sonnet"],
+            f"production handler still leaks @beta as pending: {summary}"
+        )
+
+
+class TestWatchdogNonVotersCanonical(unittest.TestCase):
+    """watchdogs.py review_watchdog : non_voters must canonicalize
+    both the assigned reviewers list and the voted set before doing
+    the difference, otherwise reviewers who already voted via MCP
+    keep getting pinged."""
+
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        self.storage = AIRCPStorage(db_path=self._tmp.name)
+        self.req_id = self.storage.create_review_request(
+            file_path="src/bar.cpp",
+            requested_by="alpha",
+            reviewers=["@beta", "@sonnet"],
+            review_type="code",
+            timeout_seconds=3600,
+        )
+
+    def tearDown(self):
+        try:
+            os.unlink(self._tmp.name)
+        except FileNotFoundError:
+            pass
+
+    def _watchdog_non_voters(self, reviewers, responses):
+        """Mirror the production logic from watchdogs.py review_watchdog
+        (post-fix). Same inline rationale as above : we test the set
+        comparison directly to avoid pulling in the full ping loop."""
+        voted_reviewers = {(r.get("reviewer") or "").lstrip("@")
+                           for r in responses}
+        return [r for r in reviewers
+                if (r or "").lstrip("@") not in voted_reviewers]
+
+    def test_non_voters_excludes_mcp_voter(self):
+        """@beta votes via MCP (stored as 'beta'). Watchdog must NOT
+        re-ping @beta."""
+        self.storage.add_review_response(
+            self.req_id, "beta", "approve", "MCP"
+        )
+        rev = self.storage.get_review_request(self.req_id)
+        non_voters = self._watchdog_non_voters(
+            ["@beta", "@sonnet"], rev.get("responses", [])
+        )
+        self.assertEqual(non_voters, ["@sonnet"])
+
+    def test_non_voters_excludes_chat_voter(self):
+        """Chat-detect vote (canonicalizes to 'beta') -> still drop
+        '@beta' from the ping list."""
+        self.storage.add_review_response(
+            self.req_id, "@beta", "approve", "[chat]"
+        )
+        rev = self.storage.get_review_request(self.req_id)
+        non_voters = self._watchdog_non_voters(
+            ["@beta", "@sonnet"], rev.get("responses", [])
+        )
+        self.assertEqual(non_voters, ["@sonnet"])
+
+    def test_non_voters_empty_when_all_voted(self):
+        self.storage.add_review_response(self.req_id, "beta", "approve", "ok")
+        self.storage.add_review_response(self.req_id, "@sonnet", "approve", "ok")
+        rev = self.storage.get_review_request(self.req_id)
+        non_voters = self._watchdog_non_voters(
+            ["@beta", "@sonnet"], rev.get("responses", [])
+        )
+        self.assertEqual(non_voters, [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

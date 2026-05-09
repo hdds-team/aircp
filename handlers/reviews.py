@@ -44,13 +44,22 @@ def get_review_by_id(handler, parsed, params):
             approvals = sum(1 for r in responses if r.get("vote") == "approve")
             changes = sum(1 for r in responses if r.get("vote") == "changes")
             comments = sum(1 for r in responses if r.get("vote") == "comment")
+            # Task #159 part 2: canonicalize both sides of the comparison.
+            # Reviewers in review_requests.reviewers JSON are stored with
+            # leading "@" (e.g. "@beta") while review_responses.reviewer
+            # is canonicalized without "@" (post-#159 fix). Without
+            # stripping "@" on both sides here, a reviewer who has
+            # voted still appears in reviewers_pending — visible bug
+            # caught by @beta during the post-restart smoke test.
+            voted_canonical = {(resp.get("reviewer") or "").lstrip("@")
+                               for resp in responses}
             review["summary"] = {
                 "approvals": approvals,
                 "changes_requested": changes,
                 "comments": comments,
                 "total_responses": len(responses),
                 "reviewers_pending": [r for r in review.get("reviewers", [])
-                                       if r not in {resp.get("reviewer") for resp in responses}]
+                                       if (r or "").lstrip("@") not in voted_canonical]
             }
             handler.send_json(review)
         else:

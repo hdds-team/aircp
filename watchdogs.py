@@ -645,10 +645,16 @@ def review_watchdog():
                     if review_age < REVIEW_PING_DELAY:
                         continue
 
-                    # Get current responses to find non-voters
+                    # Get current responses to find non-voters.
+                    # Task #159 part 2: canonicalize reviewer keys here too.
+                    # review_responses.reviewer is stored sans "@" (post #159
+                    # write-path fix) while reviewers JSON in review_requests
+                    # keeps the "@" prefix, so the naive set-diff would never
+                    # match and would ping reviewers who already voted.
                     full_review = storage.get_review_request(request_id)
                     responses = full_review.get("responses", []) if full_review else []
-                    voted_reviewers = {r.get("reviewer") for r in responses}
+                    voted_reviewers = {(r.get("reviewer") or "").lstrip("@")
+                                       for r in responses}
 
                     # P1 FIX (backward compat): if any reviewer posted changes_requested,
                     # auto-close the review. This catches zombie reviews from before the fix.
@@ -674,7 +680,8 @@ def review_watchdog():
                         print(f"[REVIEW] Auto-closed zombie review #{request_id} (changes_requested found)")
                         continue
 
-                    non_voters = [r for r in reviewers if r not in voted_reviewers]
+                    non_voters = [r for r in reviewers
+                                  if (r or "").lstrip("@") not in voted_reviewers]
 
                     # Everyone voted -> clean up state and skip
                     if not non_voters:
