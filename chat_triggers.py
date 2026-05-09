@@ -624,11 +624,21 @@ def _detect_implicit_review(from_id: str, content: str, room: str):
             if referenced_review_id is not None and rev["id"] != referenced_review_id:
                 continue
 
-            # Check if already voted
+            # Check if already voted.
+            # Task #159 fix: normalize @ prefix on both sides --
+            # MCP path stores reviewer="beta" while chat from_id is
+            # "@beta", so without normalization the comparison
+            # spuriously thinks the reviewer hasn't voted yet, and
+            # the auto-detect inserts a duplicate row (parser misfires
+            # #6/#7 of the 2026-05-09 session). Storage layer also
+            # canonicalizes at insert; this layer just needs to read
+            # legacy rows correctly too.
             full_rev = storage.get_review_request(rev["id"])
             if full_rev:
+                from_id_norm = from_id.lstrip("@")
                 already_voted = any(
-                    r.get("reviewer") == from_id for r in full_rev.get("responses", [])
+                    (r.get("reviewer") or "").lstrip("@") == from_id_norm
+                    for r in full_rev.get("responses", [])
                 )
                 if not already_voted:
                     pending_for_agent.append(full_rev)
@@ -669,7 +679,17 @@ def _detect_implicit_review(from_id: str, content: str, room: str):
 
 
 def _check_review_consensus(request_id: int):
-    """Check if a review has enough approvals to close."""
+    """Check if a review has enough approvals to close.
+
+    Task #159 fix: dedupe responses by canonical reviewer (lstrip "@")
+    before counting. Without dedupe, legacy DB rows where the same
+    agent has both "@beta" and "beta" (one from MCP path, one from
+    chat auto-detect path that didn't canonicalize) would count twice
+    and falsely close a code-type review at "2/2" with a single
+    physical voter (parser misfires #6/#7 of the 2026-05-09 session).
+    The dedupe protects historical data; future writes are
+    canonicalized at storage layer.
+    """
     rev = storage.get_review_request(request_id)
     if not rev or rev.get("status") != "pending":
         return
@@ -677,8 +697,23 @@ def _check_review_consensus(request_id: int):
     review_type = rev.get("review_type", "doc")
     needed = 2 if review_type == "code" else 1
 
-    approvals = [r for r in rev.get("responses", []) if r.get("vote") == "approve"]
-    changes = [r for r in rev.get("responses", []) if r.get("vote") == "changes"]
+    # Dedupe by canonical reviewer (strip leading @).
+    seen_approve = set()
+    seen_changes = set()
+    approvals = []
+    changes = []
+    for r in rev.get("responses", []):
+        reviewer_norm = (r.get("reviewer") or "").lstrip("@")
+        if r.get("vote") == "approve":
+            if reviewer_norm in seen_approve:
+                continue
+            seen_approve.add(reviewer_norm)
+            approvals.append(r)
+        elif r.get("vote") == "changes":
+            if reviewer_norm in seen_changes:
+                continue
+            seen_changes.add(reviewer_norm)
+            changes.append(r)
 
     if len(approvals) >= needed and not changes:
         storage.close_review_request(request_id, "approved", "completed")
@@ -706,6 +741,12 @@ def poll_messages():
                 msgs = transport.receive_new(room)
                 for m in msgs:
                     content = m.payload.get("content", "")
+
+                    # v4.7: Drop test/debug messages that leak from DDS
+                    if m.from_id == "@system" and content.startswith("[test-"):
+                        logger.debug(f"[POLL] Dropped test message: {content[:50]}")
+                        continue
+
                     project = getattr(m, 'project', '') or 'default'
                     entry = {
                         "id": m.id,

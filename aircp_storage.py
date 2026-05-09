@@ -63,30 +63,28 @@ class AIRCPStorage:
         # Back-compat aliases (used by some callers)
         self.disk_path = self.db_path
 
-        # Single shared connection + lock (replaces leaky per-thread pattern)
-        self._conn_lock = _threading.Lock()
-        self._conn: sqlite3.Connection | None = None
+        # Thread-local connections — each thread gets its own SQLite connection.
+        # WAL mode allows concurrent reads; writes are serialized by SQLite.
+        self._local = _threading.local()
 
         self.init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
-        """Get the shared SQLite connection (thread-safe via lock).
+        """Get a per-thread SQLite connection (thread-safe via thread-local).
 
-        Single connection with WAL mode. All callers share one connection;
-        the _conn_lock in each method serializes writes. SQLite WAL handles
-        concurrent reads internally.
+        Each thread gets its own connection. WAL mode handles concurrency.
         """
-        if self._conn is None:
-            with self._conn_lock:
-                if self._conn is None:
-                    self._conn = sqlite3.connect(
-                        self.db_path,
-                        check_same_thread=False,
-                        timeout=10,
-                    )
-                    self._conn.execute("PRAGMA journal_mode=WAL")
-                    self._conn.execute("PRAGMA busy_timeout=5000")
-        return self._conn
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(
+                self.db_path,
+                check_same_thread=True,
+                timeout=10,
+            )
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._local.conn = conn
+        return conn
 
     def persist_to_disk(self):
         """Legacy no-op. DB is already on disk with WAL mode.
@@ -109,15 +107,16 @@ class AIRCPStorage:
         pass
 
     def close(self):
-        """Checkpoint WAL and close connection on shutdown."""
-        if self._conn is not None:
+        """Checkpoint WAL and close current thread's connection on shutdown."""
+        conn = getattr(self._local, 'conn', None)
+        if conn is not None:
             try:
-                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                self._conn.close()
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.close()
             except Exception as e:
                 logger.warning(f"Error during close: {e}")
             finally:
-                self._conn = None
+                self._local.conn = None
 
     def init_db(self):
         """Initialize database schema"""
@@ -1541,8 +1540,21 @@ class AIRCPStorage:
             reviewer: Who is responding
             vote: 'approve', 'comment', or 'changes'
             comment: Optional comment
+
+        Note (task #159 fix): the reviewer field is canonicalized by
+        stripping the leading "@" before insert so MCP path (which
+        typically passes "beta") and chat auto-detect path (which
+        typically passes "@beta") cannot create two distinct rows that
+        bypass the (request_id, reviewer) UNIQUE constraint. Without
+        this, the chat auto-detect would re-vote on top of the MCP
+        vote (parser misfires #6, #7 of the 2026-05-09 session).
         """
         try:
+            # Canonicalize reviewer: strip leading @ to match the
+            # (request_id, reviewer) ON CONFLICT key consistently
+            # across MCP + chat-auto-detect callsites.
+            if reviewer:
+                reviewer = reviewer.lstrip("@")
             now = _sqlite_now()
             conn = self._get_conn()
             c = conn.cursor()
